@@ -1,0 +1,64 @@
+{
+  "name": "n8n-nodes-factuarea",
+  "version": "0.1.0",
+  "description": "n8n trigger node for Factuarea — starts a workflow when Factuarea delivers a signed webhook event.",
+  "license": "MIT",
+  "author": "Factuarea <info@factuarea.com>",
+  "homepage": "https://github.com/factuarea/factuarea-n8n-nodes#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/factuarea/factuarea-n8n-nodes.git"
+  },
+  "bugs": {
+    "url": "https://github.com/factuarea/factuarea-n8n-nodes/issues"
+  },
+  "keywords": [
+    "n8n-community-node-package",
+    "n8n",
+    "factuarea",
+    "webhook",
+    "trigger",
+    "invoicing",
+    "verifactu"
+  ],
+  "main": "dist/src/index.js",
+  "types": "dist/src/index.d.ts",
+  "engines": {
+    "node": ">=20.15"
+  },
+  "files": [
+    "dist/src",
+    "LICENSE",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "n8n": {
+    "n8nNodesApiVersion": 1,
+    "credentials": [
+      "dist/src/credentials/FactuareaApi.credentials.js"
+    ],
+    "nodes": [
+      "dist/src/nodes/FactuareaTrigger/FactuareaTrigger.node.js"
+    ]
+  },
+  "scripts": {
+    "build": "tsc && node -e \"const fs=require('node:fs');fs.cpSync('src','dist/src',{recursive:true,filter:(s)=>fs.statSync(s).isDirectory()||s.endsWith('.svg')})\"",
+    "test": "node scripts/assert-test-files.mjs && node --test dist/test/*.test.js test/*.test.mjs",
+    "lint:english": "node scripts/check-english-only.mjs src docs README.md CHANGELOG.md",
+    "lint:package": "node scripts/check-package-constraints.mjs",
+    "scan": "out=$(npx --yes @n8n/scan-community-package n8n-nodes-factuarea 2>&1); echo \"$out\"; case \"$out\" in *'passed all security checks'*) exit 0 ;; *) echo 'scan gate: the official analyser did not report a pass.' >&2; exit 1 ;; esac",
+    "verify": "npm run build && npm run test && npm run lint:english && npm run lint:package && npm run scan"
+  },
+  "dependencies": {},
+  "peerDependencies": {
+    "n8n-workflow": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.0",
+    "n8n-workflow": "^2.16.0",
+    "typescript": "^5.9.0"
+  }
+}

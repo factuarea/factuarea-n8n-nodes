@@ -1,0 +1,174 @@
+name: Release
+
+# Release pipeline for n8n-nodes-factuarea.
+#
+# Flow (tag + npm Trusted Publishing, no changeset tooling — see docs/RELEASING.md):
+#   1. Bump `version` in package.json and add the CHANGELOG.md entry on a
+#      branch; merge it.
+#   2. Push the tag `v<version>`. This workflow refuses to go on unless the tag
+#      and the manifest agree, runs every gate, and only then publishes with
+#      OIDC Trusted Publishing (no long-lived NPM_TOKEN) and build provenance.
+#
+# Publishing from a laptop is not an alternative path: since 1 May 2026 n8n's
+# community-node verification requires a verified package to be published from
+# GitHub Actions with npm provenance.
+#
+# Two manual steps live outside this file, both documented in docs/RELEASING.md:
+#
+#   - THE FIRST PUBLISH (0.1.0) IS DONE BY HAND. npm can only bind a Trusted
+#     Publisher to a package that already exists, so this workflow cannot create
+#     the package — it is for every release after the first one.
+#   - THE TRUSTED PUBLISHER ITSELF, bound to the triple (owner `factuarea`,
+#     repository `factuarea-n8n-nodes`, workflow file `release.yml`). Until it
+#     exists, the publish step fails with npm's own authentication error, which
+#     never mentions Trusted Publishing — hence the explainer step at the end.
+
+on:
+  push:
+    tags: ['v*']
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read # nothing here writes to the repository
+  id-token: write # OIDC token for npm Trusted Publishing + provenance attestation
+
+jobs:
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          # Pinned rather than derived from `engines` (">=20.15"), which would
+          # resolve to whatever is newest. Publishing happens from one known
+          # runtime; the support range is what the CI matrix is for.
+          node-version: 22
+          cache: npm
+          registry-url: https://registry.npmjs.org
+
+      # Before any work at all — this is the earliest step that can run it,
+      # since reading the manifest needs the Node that setup-node just
+      # installed. A tag that says one version and a manifest that says another
+      # produces a release nobody can locate afterwards, and npm versions are
+      # immutable once published.
+      - name: Check the tag against the manifest
+        id: version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          manifest="$(node -p "require('./package.json').version")"
+          if [ "$tag" != "$manifest" ]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} carries version '${tag}' but package.json declares '${manifest}'. Fix one of the two and push the tag again; nothing was published."
+            exit 1
+          fi
+          echo "Tag and manifest agree on ${manifest}."
+          echo "version=${manifest}" >> "$GITHUB_OUTPUT"
+
+      # Trusted Publishing (OIDC) requires npm >= 11.5.1. actions/setup-node
+      # ships an older npm, so install a known-good version explicitly. Same
+      # step, same reason, as the Factuarea TypeScript SDK.
+      - name: Ensure npm supports Trusted Publishing (OIDC)
+        run: npm install -g npm@^11.5.1
+
+      - run: npm ci
+
+      - run: npm run build
+
+      - run: npm test
+
+      - name: English-only gate
+        run: npm run lint:english
+
+      # Audits the tarball npm would publish, so it has to come after the build
+      # (it packs with `--ignore-scripts` and will not build `dist/` itself).
+      # This is the gate that inspects the artefact this run is about to ship.
+      - name: Package constraints gate
+        run: npm run lint:package
+
+      - name: Official n8n analyser, against the version currently on npm
+        id: scan_before
+        continue-on-error: true
+        # The three gates run before publishing, and this is the honest form of
+        # that for this one. The official analyser resolves the package FROM THE
+        # npm REGISTRY, so before publishing it can only judge the PREVIOUS
+        # release — never the artefact about to be shipped. It runs, and its
+        # verdict is in the log, but it does not hold the release: a red here is
+        # most often n8n having hardened a requirement, and in that case the
+        # release being blocked would be the release that FIXES it.
+        #
+        # The gate that does audit the unpublished artefact is the package
+        # constraints gate above. The analyser run that judges THIS version is
+        # the blocking one after the publish step.
+        #
+        # Not pinned to a version, deliberately — see the same note in ci.yml.
+        # Do not "fix" a red by pinning the analyser.
+        run: npm run scan
+
+      - name: Note the pre-publish analyser result
+        if: steps.scan_before.outcome == 'failure'
+        run: |
+          echo "::warning::The official analyser did not report a pass against the version currently on npm. That verdict is about the PREVIOUS release, not the one being published, so it does not stop this run — but if this release does not fix it, the blocking analyser step after the publish will fail. See docs/RELEASING.md."
+
+      - name: Publish to npm
+        id: publish
+        # No NPM_TOKEN, and there must never be one: publishing authenticates
+        # via OIDC Trusted Publishing, which `npm publish` picks up on its own
+        # when `id-token: write` is granted and the package has a Trusted
+        # Publisher configured on npmjs.com. A long-lived token is the exact
+        # credential Trusted Publishing exists to remove, and adding one can
+        # leave publishing working while it quietly stops being attested.
+        #
+        # NPM_CONFIG_PROVENANCE and `publishConfig.provenance` in package.json
+        # say the same thing; both are set so neither alone is load-bearing.
+        run: npm publish --access public
+        env:
+          NPM_CONFIG_PROVENANCE: "true"
+
+      - name: Official n8n analyser, against the version just published
+        # This is the blocking analyser run: now that the version exists on npm,
+        # the analyser can finally resolve and inspect the artefact this
+        # workflow shipped. A failure here fails the release loudly rather than
+        # leaving a red that nobody sees — the version cannot be taken back
+        # (npm versions are immutable; see docs/RELEASING.md on deprecating and
+        # shipping a fix forward), so the point of the step is that it is
+        # impossible to miss.
+        #
+        # Not pinned to a version, deliberately — see the note in ci.yml.
+        #
+        # The registry needs a moment to serve a version it has just accepted,
+        # so wait for it to report the version we published before asking the
+        # analyser about it. Without the wait, the analyser can inspect the
+        # PREVIOUS release and report on the wrong artefact.
+        run: |
+          version="${{ steps.version.outputs.version }}"
+          for attempt in 1 2 3 4 5 6; do
+            published="$(npm view n8n-nodes-factuarea version 2>/dev/null || true)"
+            if [ "$published" = "$version" ]; then
+              echo "npm serves ${version}; running the analyser against it."
+              break
+            fi
+            echo "npm still serves '${published:-nothing}', waiting for ${version} (attempt ${attempt}/6)..."
+            sleep 10
+          done
+          npm run scan
+
+      - name: Explain a failed release
+        if: failure()
+        run: |
+          case "${{ steps.publish.outcome }}" in
+            failure)
+              echo "::error::The publish step failed. The most likely cause is a MISSING npm TRUSTED PUBLISHER for n8n-nodes-factuarea: npm reports that as ENEEDAUTH, or as E404 on the package, and neither error mentions Trusted Publishing."
+              echo "::error::Configure it once on npmjs.com — see docs/RELEASING.md — with exactly this triple: owner 'factuarea', repository 'factuarea-n8n-nodes', workflow file 'release.yml'."
+              echo "::error::If this is the very first version, note that npm can only bind a Trusted Publisher to a package that already exists: publish 0.1.0 by hand once, then configure it. docs/RELEASING.md covers that case."
+              ;;
+            success)
+              echo "::error::The publish SUCCEEDED and a later step failed, so version ${{ steps.version.outputs.version }} IS on npm. It cannot be edited: deprecate it and ship a fix forward as a new version — see docs/RELEASING.md."
+              ;;
+            *)
+              echo "::error::A check failed before the publish step, so NOTHING was published. Fix the failing gate, then push the tag again."
+              ;;
+          esac

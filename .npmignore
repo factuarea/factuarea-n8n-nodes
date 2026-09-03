@@ -1,0 +1,37 @@
+# What the published package carries: dist/src/ (the compiled node, credential
+# and icon), package.json, LICENSE and README.md. Nothing else.
+#
+# READ THIS BEFORE TRUSTING THIS FILE.
+#
+# package.json declares a `files` allowlist, and when that field is present npm
+# builds the tarball from it and does NOT apply this root `.npmignore`. Measured
+# on npm 12.0.1: with `"files": ["dist", ...]` and a `dist/test/` rule here, the
+# compiled test tree shipped anyway — twelve files and 90 kB of test code, in an
+# artefact whose whole point is that an auditor can read all of it. The gate
+# `npm run lint:package` caught it, because it inspects the packed artefact and
+# not this file.
+#
+# So the allowlist is the mechanism that decides, and it is written narrowly:
+# `dist/src` rather than `dist`. This file is kept as a second line for the case
+# where `files` is ever removed from the manifest — it is NOT load-bearing today,
+# and no rule may be added here on the assumption that it will be enforced.
+
+# Sources, tests and gates never ship: what n8n installs is the compiled
+# artefact, and the analyser audits that artefact and not this repository.
+src/
+test/
+scripts/
+docs/
+
+# The compiled tests do not ship either. `files` is what actually keeps them
+# out; see the note above.
+dist/test/
+
+# Tooling and repository furniture.
+tsconfig.json
+.editorconfig
+.github/
+.gitignore
+*.tgz
+*.log
+.DS_Store

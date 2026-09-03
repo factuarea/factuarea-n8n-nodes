@@ -1,0 +1,6 @@
+{
+  "Product and company name. It is the Spanish-flavoured brand of the service this node talks to, it appears in the node label, in the credential name, in every delivery header and in the package name, and translating it would name a service that does not exist. Both cases are listed because the gate matches terms case-sensitively and the lowercase form is what URLs, package names and hostnames carry.": [
+    "Factuarea",
+    "factuarea"
+  ]
+}

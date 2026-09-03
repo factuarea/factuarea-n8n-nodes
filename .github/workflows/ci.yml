@@ -1,0 +1,119 @@
+name: CI
+
+# Continuous integration for n8n-nodes-factuarea.
+#
+# Every pull request and every push to main installs reproducibly (`npm ci`),
+# compiles, runs the test suite, and runs the three gates the package is
+# verified against: English-only text, package constraints, and the official
+# n8n community-package analyser.
+#
+# The work is split into two jobs on purpose. `build-and-test` runs on every
+# Node version the package claims to support, because a compile or a test that
+# only passes on one runtime is a claim `engines` does not keep. `gates` runs
+# once: the three gates are runtime-independent, and the analyser reaches the
+# network, so running it three times would be three identical answers and three
+# chances to be rate-limited.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    name: Build and test — Node ${{ matrix.node }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 20 is the floor `engines` declares (">=20.15"); 22 is Active LTS and
+        # the version the release workflow publishes from; 24 is current.
+        #
+        # Both ENDS of this range are load-bearing for the `test` script, and
+        # they contradict each other: Node 20 cannot expand a glob pattern given
+        # to `--test`, while 22 and 24 no longer expand a bare directory. Only
+        # the shape in package.json — a file list the SHELL expands — passes on
+        # all three, and that is measured, not assumed (the table lives in
+        # src/contract.ts). Dropping either end of this matrix would let the
+        # script regress to a shape broken for half the runtimes `engines`
+        # promises, and the remaining end would stay green while it happened.
+        node: [20, 22, 24]
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
+
+  gates:
+    name: Gates — English, package constraints, official analyser
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+
+      # `lint:package` audits the tarball npm would publish, and it packs with
+      # `--ignore-scripts` on purpose, so nothing builds `dist/` on its behalf.
+      # Without this step it would audit an artefact with no compiled output in
+      # it and pass by having nothing to look at.
+      - run: npm run build
+
+      - name: English-only gate
+        run: npm run lint:english
+
+      - name: Package constraints gate
+        run: npm run lint:package
+
+      - name: Official n8n community-package analyser
+        # WHY THIS IS NOT PINNED TO A VERSION, AND MUST NOT BE.
+        #
+        # `npm run scan` calls `npx --yes @n8n/scan-community-package`, which
+        # resolves the analyser at whatever version is current. Pinning it would
+        # buy a reproducible green that can be lying the day n8n hardens a
+        # requirement. We would rather this job go red the day the rule changes
+        # — which is when we want to know — than the day we try to publish, when
+        # the version is already cut. The cost is accepted and known: an
+        # occasional red that our own change did not cause. Do NOT "fix" that
+        # red by pinning the analyser.
+        #
+        # WHAT IT MEASURES, WHICH IS NOT THIS DIFF.
+        #
+        # The analyser resolves the PACKAGE from the npm registry too, so it
+        # inspects the version that is published — never this working tree. On a
+        # pull request it therefore judges the previous release. That is written
+        # here rather than worked around: the official tool has no mode that
+        # accepts a local tarball, and `lint:package` above is the gate that
+        # audits what we are about to ship. The analyser run that judges a new
+        # version is the one AFTER publishing it, in release.yml.
+        #
+        # It is still BLOCKING. The spec is explicit that the analyser's result
+        # is not read informatively and is not waived without a written reason,
+        # and a red here is exactly the signal described above.
+        #
+        # The one case that is announced instead of failed is the package not
+        # being on npm at all. The first version is published by hand (npm can
+        # only bind a Trusted Publisher to a package that already exists — see
+        # docs/RELEASING.md), and until then the analyser has nothing to
+        # measure. "Nothing to measure" is not "clean", so it is said out loud
+        # rather than passed over in silence, and any OTHER failure to reach npm
+        # fails the job instead of being mistaken for it.
+        run: |
+          if published=$(npm view n8n-nodes-factuarea version 2>&1); then
+            echo "Version currently on npm: $published"
+            npm run scan
+          elif printf '%s' "$published" | grep -q 'E404'; then
+            echo "::warning::n8n-nodes-factuarea is not on npm yet, so the official analyser has nothing to measure. It starts gating once the first version is published by hand — see docs/RELEASING.md."
+          else
+            echo "::error::Could not ask npm whether n8n-nodes-factuarea is published, so the analyser gate could not run. npm said: $published"
+            exit 1
+          fi
