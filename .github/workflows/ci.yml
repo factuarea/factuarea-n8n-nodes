@@ -29,18 +29,20 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # 20 is the floor `engines` declares (">=20.15"); 22 is Active LTS and
-        # the version the release workflow publishes from; 24 is current.
+        # 22 is the floor `engines` declares (">=22.0.0") and the version the
+        # release workflow publishes from; 24 is current. Node 20 left the matrix
+        # on 2026-09-04: `n8n-workflow` 2.x depends on `@n8n/expression-runtime`,
+        # which loads `isolated-vm` eagerly, and `isolated-vm` 6.x only builds on
+        # Node 22+ (no prebuilt binary, `npm ci` fails compiling it). n8n 2.x
+        # itself requires Node 24, so no supported host runs this node on 20.
         #
         # Both ENDS of this range are load-bearing for the `test` script, and
-        # they contradict each other: Node 20 cannot expand a glob pattern given
-        # to `--test`, while 22 and 24 no longer expand a bare directory. Only
-        # the shape in package.json — a file list the SHELL expands — passes on
-        # all three, and that is measured, not assumed (the table lives in
-        # src/contract.ts). Dropping either end of this matrix would let the
-        # script regress to a shape broken for half the runtimes `engines`
-        # promises, and the remaining end would stay green while it happened.
-        node: [20, 22, 24]
+        # the measured table in src/contract.ts shows why the `test` script is a
+        # file list the SHELL expands (22 and 24 no longer expand a bare
+        # directory). Keep both remaining ends: a regression to a directory
+        # shape would fail on both, a regression to a glob would pass on both,
+        # and only the file list is the shape `engines` promises.
+        node: [22, 24]
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4

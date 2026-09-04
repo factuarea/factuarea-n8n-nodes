@@ -44,7 +44,7 @@ jobs:
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          # Pinned rather than derived from `engines` (">=20.15"), which would
+          # Pinned rather than derived from `engines` (">=22.0.0"), which would
           # resolve to whatever is newest. Publishing happens from one known
           # runtime; the support range is what the CI matrix is for.
           node-version: 22

@@ -89,8 +89,11 @@
  *     Directories stopped being expanded after Node 20 (`MODULE_NOT_FOUND` on
  *     `.../dist/test`, two synthetic failures, not one real test run), and Node
  *     20 does not understand a glob pattern (`Could not find '.../**\/*.test.js'`).
- *     Only a plain list survives all three, and `engines` declares `>=20.15`
- *     while the CI matrix runs 20, 22 and 24, so all three have to pass.
+ *     Only a plain list survives all three. `engines` now declares `>=22.0.0`
+ *     and the CI matrix runs 22 and 24 (Node 20 left on 2026-09-04: the
+ *     `isolated-vm` that `n8n-workflow` 2.x loads eagerly only builds on 22+),
+ *     but the list shape is kept because it is the only one measured to pass
+ *     on every runtime that ever mattered here.
  *     The arguments are therefore UNQUOTED on purpose: the shell expands them
  *     and Node receives real paths. Two consequences worth knowing before
  *     editing them. The patterns are one level deep, so the test trees stay

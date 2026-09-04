@@ -48,7 +48,7 @@ build on this node.
 ## Requirements
 
 - n8n with community nodes enabled.
-- Node.js 20.15 or newer (the `engines` requirement of this package).
+- Node.js 22 or newer (the `engines` requirement of this package; `n8n-workflow` 2.x pulls in `isolated-vm`, which needs Node 22).
 - A Factuarea account with an API key.
 
 ## Installation
