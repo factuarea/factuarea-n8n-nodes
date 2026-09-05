@@ -1,9 +1,13 @@
 {
   "name": "n8n-nodes-factuarea",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "n8n trigger node for Factuarea — starts a workflow when Factuarea delivers a signed webhook event.",
   "license": "MIT",
-  "author": "Factuarea <info@factuarea.com>",
+  "author": {
+    "name": "Factuarea",
+    "email": "info@factuarea.com",
+    "url": "https://factuarea.com"
+  },
   "homepage": "https://github.com/factuarea/factuarea-n8n-nodes#readme",
   "repository": {
     "type": "git",
