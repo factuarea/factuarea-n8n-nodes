@@ -143,6 +143,13 @@ jobs:
         # so wait for it to report the version we published before asking the
         # analyser about it. Without the wait, the analyser can inspect the
         # PREVIOUS release and report on the wrong artefact.
+        # SCAN_VERSION pins the analyser to the version this run shipped. Without
+        # it the analyser resolves `latest` on its own, and the registry can keep
+        # serving the PREVIOUS release for a while after `npm view` already
+        # reports the new one — measured twice on 2026-09-05 (0.1.1 and 0.1.2):
+        # the step went red judging the artefact it was not asked about.
+        env:
+          SCAN_VERSION: ${{ steps.version.outputs.version }}
         run: |
           version="${{ steps.version.outputs.version }}"
           for attempt in 1 2 3 4 5 6; do
