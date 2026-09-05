@@ -4,6 +4,11 @@ All notable changes to `n8n-nodes-factuarea` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the package
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.1.1 — 2026-09-05
+
+- Published through GitHub Actions with npm provenance (OIDC Trusted Publishing). No functional change over 0.1.0, which was published by hand without provenance and therefore fails the official n8n community node scan.
+- Node 22 or newer is now required: `n8n-workflow` 2.x loads `isolated-vm`, which only builds on 22+.
+
 ## 0.1.0 — unreleased
 
 First release. One trigger node, one credential, no runtime dependencies.
