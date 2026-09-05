@@ -4,6 +4,10 @@ All notable changes to `n8n-nodes-factuarea` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the package
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.1.2 — 2026-09-05
+
+- `package.json` declares `author.name` (Factuarea), required by the official n8n community node scan (`community-package-json-author-name-missing`). No functional change.
+
 ## 0.1.1 — 2026-09-05
 
 - Published through GitHub Actions with npm provenance (OIDC Trusted Publishing). No functional change over 0.1.0, which was published by hand without provenance and therefore fails the official n8n community node scan.
