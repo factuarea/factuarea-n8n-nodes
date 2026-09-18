@@ -1,11 +1,11 @@
 # Limitations
 
 What this node cannot do, why, and what to do instead. Everything here was
-measured against the Factuarea platform on 2026-09-02, not assumed. Each section
-names the file that decides the behaviour, so the claim can be re-checked rather
-than trusted.
+measured against the Factuarea platform, not assumed: sections 1 to 4 on
+2026-09-02 and section 5 on 2026-09-17. Each section names the file that decides
+the behaviour, so the claim can be re-checked rather than trusted.
 
-There are four limitations that will change how you build. Read the first one
+There are five limitations that will change how you build. Read the first one
 before you install: it decides whether the node can work for you at all.
 
 ---
@@ -228,6 +228,48 @@ holiday for a machine under a desk — **deactivate the workflow first**. A
 deactivated workflow has no destination in Factuarea, so nothing fails, nothing
 counts towards the threshold, and the events are still recorded in Factuarea for
 you to replay by hand.
+
+---
+
+## 5. This package does not write to Factuarea
+
+**The trigger reads the event catalogue and manages its own webhook destination.
+Nothing here creates, updates or deletes anything else in your account, and
+there is no second node in this package that does.**
+
+The manifest declares exactly one node, of trigger type, and exactly one
+credential, and that is checked rather than intended: `npm run lint:package`
+reads the artefact that would be published and fails when the manifest declares
+anything else. So the absence is structural, not an oversight of a particular
+version.
+
+It is worth naming because of what Factuarea publishes on the other side. Its
+ERP — sales orders, purchase orders, goods receipts, warehouses, stock
+reservations, stock transfers, delivery-note fulfilment and returns — emits
+events this trigger delivers, and the obvious next thought in a workflow is to
+act on one: receive `sales_order.confirmed`, create something, change a state.
+That second half is not in this package.
+
+### The remedy
+
+Two paths, both supported, both using the credential this package already ships:
+
+- **n8n's HTTP Request node** against the public API, when the workflow knows
+  which operation it wants. Under **Authentication**, **Predefined Credential
+  Type** lists the **Factuarea API** credential, so the key is not pasted twice.
+  Send an `Idempotency-Key` header derived from something stable — the `id` of
+  the event that started the workflow is stable across every retry of that
+  event, while `delivery_id` is not — so a retried write is not performed twice.
+- **n8n's MCP Client Tool node** against `https://mcp.factuarea.com`, when an AI
+  step should choose the operation instead of the workflow hardcoding it.
+
+The API key needs the scope of each operation it calls, and those are **not**
+among the four scopes the trigger needs. A key created for the trigger alone is
+refused, with the missing permission named.
+
+[ACTION-NODE-DECISION.md](ACTION-NODE-DECISION.md) records why no action node is
+published, what it would cost, what would reopen the question, and a worked
+example of the first path.
 
 ---
 

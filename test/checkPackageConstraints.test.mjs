@@ -6,11 +6,16 @@
  * parts and leave the contract that actually matters — "exit 1 and name the
  * offender" — untested, and that contract is the whole point of a gate.
  *
- * Every artefact here is SYNTHETIC: a temporary directory holding a
+ * Every artefact here is SYNTHETIC but one: a temporary directory holding a
  * `package.json`, a licence file and a minimal `dist/**`. The gate accepts an
  * already-extracted artefact directory as its argument precisely so these tests
- * never have to pack anything — packing would compile, and several agents share
- * one `dist/` in this repository.
+ * mostly never have to pack anything — packing reads `dist/`, which several
+ * agents share in this repository, and it is slow enough to be felt on every
+ * case.
+ *
+ * The one exception is the last case, which packs the REAL package. A rule that
+ * only ever meets artefacts written by its own tests can be confidently wrong
+ * about the artefact that ships, so one case measures the real one.
  *
  * This file is `.mjs` and not TypeScript on purpose: it drives a plain Node
  * script and needs no compilation, so it runs before `dist/` exists.
@@ -141,6 +146,31 @@ function artefact(name, mutate = () => {}) {
 function runGate(root) {
 	const result = spawnSync(process.execPath, [GATE, root], { encoding: 'utf8' });
 	return { status: result.status, output: `${result.stdout}${result.stderr}` };
+}
+
+/**
+ * The gate's grouping threshold and span, restated here ON PURPOSE.
+ *
+ * They are not imported — the gate is a script, not a module, and importing it
+ * would run it. Restating them is what turns them into numbers fixed BY PROOF:
+ * raising the threshold in the gate alone turns the two cases below red, so the
+ * change has to be made deliberately and in both places, which is the point.
+ * Read from the gate they would be a comment nobody checks.
+ */
+const EVENT_NAME_GROUP_THRESHOLD = 3;
+const EVENT_NAME_GROUP_SPAN_LINES = 5;
+
+/**
+ * One compiled file holding the given names as an array of literals.
+ *
+ * The names themselves are written INLINE at each call. A shared constant with
+ * every event name in it would be the very list the gate forbids, sitting in
+ * the file that tests the gate.
+ */
+function eventListing(names) {
+	const entries = names.map((name) => `    '${name}',`);
+
+	return ['"use strict";', 'exports.EVENTS = [', ...entries, '];', ''].join('\n');
 }
 
 describe('check-package-constraints', () => {
@@ -291,5 +321,142 @@ describe('check-package-constraints', () => {
 		assert.match(output, /dist\/src\/inlined\.js:2:/);
 		assert.match(output, /node:fs/);
 		assert.match(output, /process\.env/);
+	});
+
+	it('rejects a frozen list of event names and names the file and the line', () => {
+		// The selector is filled from the live catalogue. A list written into the
+		// artefact offers names the API rejects as soon as one is renamed, and it
+		// ties the catalogue to the published version — which is the promise the
+		// package makes in its documentation and cannot keep with a list inside.
+		const root = artefact('frozen-event-list', (manifest, files) => {
+			files['dist/src/events.js'] = eventListing([
+				'invoice.created',
+				'invoice.sent',
+				'sales_order.confirmed',
+			]);
+		});
+
+		const { status, output } = runGate(root);
+
+		assert.equal(status, 1, `the gate accepted a frozen list of event names:\n${output}`);
+		// The file AND the line the list starts on, so the finding is actionable.
+		assert.match(output, /dist\/src\/events\.js:3:/);
+		assert.match(output, /invoice\.created/);
+		// Counted in the final summary, like every other finding of this gate.
+		assert.match(output, /1 problem\(s\)/);
+	});
+
+	it('accepts a single event named in an error message', () => {
+		// The other side of the same rule. Naming ONE event where the reader needs
+		// it is legitimate and common, and a gate that reported it would be
+		// switched off by the first person it stopped — a gate nobody runs
+		// protects nothing.
+		const root = artefact('single-event-mention', (manifest, files) => {
+			files['dist/src/errors.js'] = [
+				'"use strict";',
+				"exports.message = 'Subscribe to invoice.created before activating this workflow.';",
+				"exports.name = 'invoice.created';",
+				'',
+			].join('\n');
+		});
+
+		const { status, output } = runGate(root);
+
+		assert.equal(status, 0, `the gate read a single event mention as a list:\n${output}`);
+	});
+
+	it('does not read the same event name repeated as a list', () => {
+		// A name said three times is one name said three times. The gate counts
+		// DISTINCT names, because what makes a list a list is that it enumerates
+		// the catalogue, not that it is long.
+		const root = artefact('repeated-event-name', (manifest, files) => {
+			files['dist/src/retry.js'] = [
+				'"use strict";',
+				"exports.first = 'goods_receipt.posted';",
+				"exports.second = 'goods_receipt.posted';",
+				"exports.third = 'goods_receipt.posted';",
+				'',
+			].join('\n');
+		});
+
+		const { status, output } = runGate(root);
+
+		assert.equal(status, 0, `the gate read one repeated name as a list:\n${output}`);
+	});
+
+	it('fixes the grouping threshold by proof: one name below it passes, one above it fails', () => {
+		// Two artefacts that differ by exactly one line. The threshold is then a
+		// number this suite holds, not a number somebody reads off the gate and
+		// trusts: move it in the gate alone and this case goes red.
+		const names = ['purchase_order.approved', 'goods_receipt.posted', 'stock_transfer.dispatched'];
+		assert.equal(
+			names.length,
+			EVENT_NAME_GROUP_THRESHOLD,
+			'this case needs exactly threshold-many names',
+		);
+
+		const below = runGate(
+			artefact('threshold-below', (manifest, files) => {
+				files['dist/src/events.js'] = eventListing(names.slice(0, EVENT_NAME_GROUP_THRESHOLD - 1));
+			}),
+		);
+		assert.equal(below.status, 0, `the gate reported a group below its threshold:\n${below.output}`);
+
+		const above = runGate(
+			artefact('threshold-above', (manifest, files) => {
+				files['dist/src/events.js'] = eventListing(names);
+			}),
+		);
+		assert.equal(above.status, 1, `the gate accepted a group at its threshold:\n${above.output}`);
+		assert.match(above.output, /dist\/src\/events\.js:3:/);
+	});
+
+	it('does not group event names that sit further apart than the span', () => {
+		// The other half of "in proximity". Threshold-many names in one file, each
+		// beyond the span from the next, are prose about different things and not
+		// a list; what makes a list is that they are written together.
+		const scattered = ['"use strict";'];
+		for (const name of ['fulfilment.prepared', 'fulfilment.handed_over', 'fulfilment.delivered']) {
+			scattered.push(`exports.note = 'Factuarea emits ${name} on its own.';`);
+			scattered.push(`exports.name = '${name}';`);
+			scattered.push(...Array.from({ length: EVENT_NAME_GROUP_SPAN_LINES + 1 }, () => ''));
+		}
+
+		const root = artefact('scattered-event-names', (manifest, files) => {
+			files['dist/src/notes.js'] = `${scattered.join('\n')}\n`;
+		});
+
+		const { status, output } = runGate(root);
+
+		assert.equal(status, 0, `the gate grouped names that sit far apart:\n${output}`);
+	});
+
+	it('accepts the real package, packed the way npm would publish it', () => {
+		// The ONLY case here that packs, and the counter-proof that the event-list
+		// rule does not start red on a false positive: the package as it stands
+		// has to pass. A rule that only ever meets artefacts written by its own
+		// tests can be confidently wrong about the one that ships.
+		//
+		// Measured on 2026-09-17: the packed artefact carries 14 executable files
+		// and not one event-name literal, so the rule starts green on the package
+		// it is added to rather than on a promise that it would.
+		//
+		// It needs `dist/src` on disk — the gate packs with `--ignore-scripts` and
+		// never builds. `npm test` runs `assert-test-files` first, which already
+		// refuses a suite without a build, and both workflows build before
+		// testing, so inside the suite the compiled tree is always there.
+		assert.ok(
+			fs.existsSync(path.resolve(HERE, '..', NODE_PATH)),
+			`${NODE_PATH} is missing. Run \`npm run build\` first: this case packs the ` +
+				'project, and there would be nothing compiled to audit.',
+		);
+
+		const result = spawnSync(process.execPath, [GATE], { encoding: 'utf8' });
+		const output = `${result.stdout}${result.stderr}`;
+
+		assert.equal(result.status, 0, `the gate rejected the real package:\n${output}`);
+		// The summary says how many executable files it read, so a run that
+		// audited nothing cannot read as a pass.
+		assert.match(output, /OK — \d+ executable file\(s\) audited/);
 	});
 });

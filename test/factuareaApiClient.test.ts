@@ -624,3 +624,89 @@ describe('createFactuareaApiClient — answers the node cannot use', () => {
 		);
 	});
 });
+
+/**
+ * ## Where the ERP entries actually get filtered
+ *
+ * The available-only rule lives in `listEventCatalog()` and nowhere else: the
+ * picker (`src/nodes/FactuareaTrigger/loadEventOptions.ts`) delegates to it and
+ * deliberately does not filter a second time, because two copies of one rule
+ * are two places to keep in sync and the second is the one that gets forgotten.
+ * So the ERP entries are dropped or kept HERE, and
+ * `test/loadEventOptions.test.ts` drives this real client over a doubled HTTP
+ * helper to pin the end-to-end guarantee instead of asserting the same rule
+ * twice in two files.
+ *
+ * The event names below are written inline, case by case, and never collected
+ * into a shared constant: `scripts/check-package-constraints.mjs` refuses a
+ * group of event-name literals in the published artefact, and a shared constant
+ * in the test tree would be that same fixed list in the place where nobody
+ * looks at it.
+ *
+ * These cases are TypeScript, so `npm test` reaches them through
+ * `dist/test/*.test.js` after `npm run build`: they execute in the serial
+ * validation phase of this change, not in the phase that writes them.
+ *
+ * Names measured on 2026-09-17 against
+ * `backend/app/Webhooks/Domain/ValueObject/EventName.php` in the Factuarea
+ * monorepo.
+ */
+describe('createFactuareaApiClient — the ERP entries meet the same status filter', () => {
+	it('drops the announced ERP entries and hands back the active ones', async () => {
+		const double = helperDouble(
+			answer(200, {
+				data: [
+					{ name: 'sales_order.confirmed', category: 'sales_order', description: 'Pedido de venta confirmado', status: 'available' },
+					{ name: 'order.received', category: 'order', description: 'Pedido recibido', status: 'coming_soon' },
+					{ name: 'goods_receipt.posted', category: 'goods_receipt', description: 'Recepción contabilizada', status: 'available' },
+					{ name: 'return.refunded', category: 'return', description: 'Devolución reembolsada', status: 'available' },
+				],
+			}),
+		);
+
+		const entries = await client(double).listEventCatalog();
+
+		// The families are new; the rule is not. An ERP entry the catalogue
+		// announces without emitting it yet is refused with 422 by the creation
+		// call, so it is dropped here — which is why the picker can render what
+		// this method returns without knowing a single ERP name.
+		assert.deepEqual(
+			entries.map((entry) => entry.name),
+			['sales_order.confirmed', 'goods_receipt.posted', 'return.refunded'],
+		);
+	});
+
+	it('keeps reading a catalogue entry that carries a field this version does not know', async () => {
+		const double = helperDouble(
+			answer(200, {
+				data: [
+					{
+						name: 'stock_transfer.dispatched',
+						category: 'stock_transfer',
+						description: 'Traspaso despachado',
+						status: 'available',
+						// A key a later API version adds. A published package
+						// cannot be taken down by a catalogue that grows: this
+						// client reads the two fields it needs — the name and
+						// the status — and passes the entry on as it arrived,
+						// instead of rebuilding it from a known set of keys and
+						// refusing whatever falls outside.
+						module: 'stock_transfers',
+					},
+				],
+			}),
+		);
+
+		const entries = await client(double).listEventCatalog();
+
+		const [first] = entries;
+		assert.ok(first !== undefined, 'an unknown field must not drop the entry');
+		assert.equal(first.name, 'stock_transfer.dispatched');
+		assert.equal(first.status, 'available');
+		assert.equal(first.category, 'stock_transfer');
+		assert.equal(first.description, 'Traspaso despachado');
+		// The unknown key survives the read: nothing here strips it, so a field
+		// added tomorrow reaches whoever asks for it without a release.
+		assert.equal((first as unknown as Record<string, unknown>)['module'], 'stock_transfers');
+	});
+});

@@ -4,6 +4,48 @@ All notable changes to `n8n-nodes-factuarea` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the package
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased — not published
+
+Documentation and gates only. **No new version of this package is released for
+the Factuarea ERP, and none is needed.** Factuarea's ERP adds eight families of
+events — sales orders, purchase orders, goods receipts, warehouses, stock
+reservations, stock transfers, delivery-note fulfilment and returns — and they
+reach the node's event picker through the live catalogue, which is read over the
+network every time the picker is opened. The published artefact already behaves
+correctly; republishing it would spend a release, and another pass through
+community verification, to change nothing a user can observe.
+
+Nothing under `src/` changed. That the node's source tree is untouched is the
+result this work demonstrates, not a detail of it: if a new family of events had
+required a code change here, the promise that the picker follows the catalogue
+without a release would have been false.
+
+### Added
+
+- `docs/ACTION-NODE-DECISION.md`: the recorded decision not to publish an action
+  node for the ERP operations, with the measurement behind it (those writes are
+  already reachable from n8n's HTTP Request node with an `Idempotency-Key`, and
+  from the MCP Client Tool node), the cost it avoids, the condition that would
+  reopen it, and a worked example of writing to Factuarea from a workflow.
+- A fifth entry in `docs/LIMITATIONS.md`: this package does not write to
+  Factuarea, and what to use instead.
+- A rule in `scripts/check-package-constraints.mjs` that fails when the packaged
+  artefact carries a group of literal event names, naming the file and the line.
+  A hardcoded list would offer events the API refuses to subscribe to and would
+  tie the catalogue to the published version; the rule keeps that impossible
+  rather than merely discouraged.
+- Tests that drive the real client over a doubled HTTP helper on a catalogue
+  containing ERP events: an active one is offered, one the catalogue marks
+  `coming_soon` is not, and neither needs a change under `src/`.
+
+### Changed
+
+- `README.md` names the ERP event families, states that they appear in the picker
+  without updating the package, explains what happens to an event that is
+  announced but not yet emitted and where to read the state of each one, and
+  confirms that none of it adds a scope: `events:read` is still all the picker
+  needs.
+
 ## 0.1.2 — 2026-09-05
 
 - `package.json` declares `author.name` (Factuarea), required by the official n8n community node scan (`community-package-json-author-name-missing`). No functional change.
