@@ -14,6 +14,13 @@ To call the Factuarea API from a workflow, use n8n's HTTP Request node against
 the [public API](https://docs.factuarea.com), or the MCP Client Tool node
 against `https://mcp.factuarea.com`.
 
+There is no action node for Factuarea's ERP operations — creating a sales order,
+confirming it, posting a goods receipt — and that is a recorded decision rather
+than an omission. [docs/ACTION-NODE-DECISION.md](docs/ACTION-NODE-DECISION.md)
+holds the reason it was taken, the date, what would reopen it, and a worked
+example of writing to Factuarea from a workflow with the credential this package
+already ships.
+
 ---
 
 ## Before you install: Factuarea must be able to reach your n8n
@@ -40,7 +47,7 @@ Your options:
 
 There is no setting in this node, and no configuration in Factuarea, that lifts
 this restriction. See [docs/LIMITATIONS.md](docs/LIMITATIONS.md) for the full
-measurement and for the other three limitations you should know about before you
+measurement and for the other four limitations you should know about before you
 build on this node.
 
 ---
@@ -107,6 +114,39 @@ Nothing is hardcoded in the package. Two consequences:
 If the catalogue cannot be read, the field stays empty and the node reports that
 the list could not be loaded. It does not fall back to a built-in list, because
 a stale list would offer events the API refuses.
+
+### The ERP families are already in the picker
+
+Factuarea's ERP publishes eight families of events: sales orders
+(`sales_order.*`), purchase orders (`purchase_order.*`), goods receipts
+(`goods_receipt.*`), warehouses (`warehouse.*`), stock reservations
+(`stock_reservation.*`), stock transfers (`stock_transfer.*`), delivery-note
+fulfilment (`fulfilment.*`) and returns (`return.*`).
+
+**They appear in the picker with the version of this package you already have,
+and no update of it makes them appear.** That is worth stating plainly, because
+the assumption usually runs the other way. The picker reads the catalogue over
+the network each time you open it, so a family Factuarea publishes after this
+package was released arrives on its own. If you are waiting for a release that
+adds ERP events, there is nothing to wait for and nothing to ask for: opening an
+issue requesting one would be asking for a version whose only content would be
+the version number.
+
+An ERP event Factuarea has announced but cannot emit yet behaves like every other
+announced event: the catalogue returns it with a `status` of `coming_soon`, the
+picker leaves it out, and it starts being offered — again with no update here —
+once Factuarea begins emitting it. To see where each event stands, read the
+catalogue itself: `GET /v1/event-catalog` returns one entry per event with its
+`name`, `category`, `description` and `status`, and pressing **Test** on the
+credential exercises that same call. It is also documented at
+<https://docs.factuarea.com/guides/events>.
+
+None of this adds a permission to the node. The picker needs `events:read` and
+nothing more, whichever family it lists, because the catalogue is one global
+endpoint rather than one endpoint per resource: the four scopes in the table
+above are still the four. Calling an ERP **write** from a workflow does need its
+own scope on the key — see
+[docs/ACTION-NODE-DECISION.md](docs/ACTION-NODE-DECISION.md).
 
 The selection is sent to Factuarea **when the workflow is activated**. Changing
 it later takes effect on the next activation: the destination is created once,
@@ -227,6 +267,7 @@ The same procedure is documented by Factuarea at
 | [docs/RELEASING.md](docs/RELEASING.md) | How a version of this package is published, including the manual npm step. |
 | [docs/ENGLISH-ONLY.md](docs/ENGLISH-ONLY.md) | Why this repository is written in English while the rest of Factuarea is not. |
 | [docs/MCP-REGISTRY.md](docs/MCP-REGISTRY.md) | The decision on listing the Factuarea MCP server in n8n's MCP servers registry. |
+| [docs/ACTION-NODE-DECISION.md](docs/ACTION-NODE-DECISION.md) | Why this package publishes no action node for the ERP, and how to write to Factuarea from a workflow instead. |
 | [CHANGELOG.md](CHANGELOG.md) | What each version contains. |
 
 ## Support

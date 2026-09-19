@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Package constraints gate — licence, runtime dependencies, environment, file
- * system and manifest shape.
+ * system, manifest shape and frozen lists of event names.
  *
  * ## What this gate reads, and why it is not the source tree
  *
@@ -15,14 +15,15 @@
  *
  * ## Why `npm pack` to a directory and `tar`, and not `npm pack --dry-run --json`
  *
- * `--dry-run --json` lists the file NAMES that would ship. Three of the four
+ * `--dry-run --json` lists the file NAMES that would ship. Four of the five
  * checks here need the CONTENT — the licence text, the compiled JavaScript, the
- * node's own description — so a listing is not enough. We pack for real into a
- * temporary directory, extract with `tar`, audit the extracted tree and delete
- * it. `--ignore-scripts` is passed on purpose: the gate must never trigger a
- * build, both because a build is not what publishing audits and because several
- * agents share one `dist/` in this repository and a gate that compiles would
- * collide with whoever is compiling.
+ * node's own description, the literals the compiled JavaScript carries — so a
+ * listing is not enough. We pack for real into a temporary directory, extract
+ * with `tar`, audit the extracted tree and delete it. `--ignore-scripts` is
+ * passed on purpose: the gate must never trigger a build, both because a build
+ * is not what publishing audits and because several agents share one `dist/` in
+ * this repository and a gate that compiles would collide with whoever is
+ * compiling.
  *
  * ## Why this script may use `node:fs` and `node:child_process`
  *
@@ -113,6 +114,83 @@ const MODULE_REFERENCES = [
 const EXECUTABLE_EXTENSIONS = ['.js', '.cjs', '.mjs'];
 
 /**
+ * A published event name, recognised BY SHAPE: lowercase segments of letters,
+ * digits and underscores joined by dots — a family, a dot and a transition,
+ * plus the three-segment form the catalogue also publishes.
+ *
+ * NO FAMILY IS ENUMERATED HERE, and none may be. A list of families in this
+ * file would be the very thing this rule keeps out of the artefact, written in
+ * the one place nobody re-reads, and it would go stale the first time the
+ * catalogue grows — which is exactly the failure the rule exists to prevent.
+ *
+ * The shape is matched against the WHOLE content of a string literal. A name
+ * mentioned inside a sentence is prose and is not a list entry; a name that IS
+ * the literal is how a frozen list is written, in every form of it.
+ */
+const EVENT_NAME_SHAPE = /^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$/;
+
+/**
+ * String literals in the three forms the compiled artefact can carry: single
+ * quotes, double quotes and backticks. The body is "an escape, or anything that
+ * is not the closing quote", never a lazy `.*?`, for the reason documented at
+ * length on `stripComments`: laziness is per MATCH, so on a line carrying
+ * several literals a lazy body lets the engine run past the first close and
+ * swallow whatever sits between them.
+ */
+const STRING_LITERAL = /(['"`])((?:\\.|(?!\1)[^\\])*)\1/g;
+
+/**
+ * How many DISTINCT event names have to sit together before the gate calls it a
+ * list.
+ *
+ * WHY A THRESHOLD EXISTS AT ALL. One name in an error message ("subscribe to
+ * invoice.created first") or in an example is legitimate, common and useful,
+ * and a gate that reported those would be switched off within a week — a gate
+ * nobody runs protects nothing. Two names are still a comparison or a
+ * before-and-after in one sentence. Three names written down together are
+ * somebody copying the catalogue into the package.
+ *
+ * Repetition does not count: the same name written three times is one name said
+ * three times, not a list.
+ */
+const EVENT_NAME_GROUP_THRESHOLD = 3;
+
+/**
+ * How far apart, in lines, the names of one group may sit.
+ *
+ * A frozen list is written TOGETHER: one array with an entry per line, or a
+ * single minified line where the distance is zero. Names that turn up in
+ * different paragraphs of the same file are prose about different things, and
+ * this span is what separates the two without needing to understand either.
+ */
+const EVENT_NAME_GROUP_SPAN_LINES = 5;
+
+/** How many names of a group the finding spells out before it says "and N more". */
+const EVENT_NAME_SAMPLE_SIZE = 5;
+
+/**
+ * Event-name literals the artefact may carry anyway, ENUMERATED one at a time
+ * and keyed by the reason, in the same shape as `FORBIDDEN_MODULES` above.
+ *
+ * IT IS EMPTY, AND THAT IS THE POINT. An entry names one file and one exact
+ * name. A PATTERN IS FORBIDDEN HERE — a directory, a family prefix, a regular
+ * expression — because a pattern blesses every future list that happens to
+ * match it, and that is how a guardrail stops guarding without anyone deciding
+ * to switch it off. If a legitimate case ever appears, add the pair and write
+ * the reason it is legitimate; never widen an existing entry to cover it.
+ *
+ * @type {Record<string, Array<{file: string, name: string}>>}
+ */
+const EVENT_LITERAL_EXCEPTIONS = {};
+
+/** `<file>|<name>` for every declared exception, flattened from the table above. */
+const EVENT_LITERAL_EXCEPTION_KEYS = new Set(
+	Object.values(EVENT_LITERAL_EXCEPTIONS).flatMap((entries) =>
+		entries.map(({ file, name }) => `${file}|${name}`),
+	),
+);
+
+/**
  * Runs the gate. Returns the list of problems; an empty list means the artefact
  * is clean.
  *
@@ -143,7 +221,16 @@ function auditArtefact(artefactRoot) {
 
 	const executableFiles = collectExecutableFiles(artefactRoot);
 	for (const file of executableFiles) {
-		scanForEnvironmentAndFileSystem(artefactRoot, file, report);
+		// One walk, one read and one comment strip, handed to every scan. A scan
+		// that collected its own files or removed comments its own way would
+		// drift from this one the first time either is touched, and the two
+		// would then disagree about what the artefact says — with the gate
+		// reporting whichever answer happened to come first.
+		const relative = path.relative(artefactRoot, file);
+		const lines = stripComments(fs.readFileSync(file, 'utf8')).split('\n');
+
+		scanForEnvironmentAndFileSystem(relative, lines, report);
+		scanForFrozenEventLists(relative, lines, report);
 	}
 
 	return { problems, scannedFiles: executableFiles.length };
@@ -325,16 +412,17 @@ function checkNodeIsTrigger(artefactRoot, nodePath, report) {
  * line.
  *
  * The scan is LEXICAL, and deliberately so: it reads what the artefact says, not
- * what it means. Comments are removed first — the compiler already strips them
- * (`removeComments` in `tsconfig.json`), and doing it again costs nothing and
+ * what it means. Comments are already gone when the lines arrive — `auditArtefact`
+ * strips them once for every scan, and the compiler had stripped them before
+ * that (`removeComments` in `tsconfig.json`); doing it again costs nothing and
  * covers a file that arrives some other way. A `process.env` inside a string
  * literal would still be reported. That is the safe direction: a false red is
  * read and dismissed by a human, a false green ships.
+ *
+ * @param {string} relative Path of the file inside the artefact, for the report.
+ * @param {string[]} lines The file, comments stripped, split by line.
  */
-function scanForEnvironmentAndFileSystem(artefactRoot, absolutePath, report) {
-	const relative = path.relative(artefactRoot, absolutePath);
-	const lines = stripComments(fs.readFileSync(absolutePath, 'utf8')).split('\n');
-
+function scanForEnvironmentAndFileSystem(relative, lines, report) {
 	lines.forEach((line, index) => {
 		const lineNumber = index + 1;
 
@@ -366,6 +454,103 @@ function moduleSpecifiersOn(line) {
 		}
 	}
 	return specifiers;
+}
+
+/**
+ * Reads one executable file of the artefact looking for groups of event names
+ * written as literals, and reports each group with the line it starts on.
+ *
+ * ## Why this rule exists
+ *
+ * The trigger fills its event selector from the LIVE public catalogue. That is
+ * what lets a family of events Factuarea adds after publication show up in the
+ * selector with the version already installed, and it is the promise the
+ * package makes in its documentation. A literal list inside the artefact breaks
+ * that promise twice over: it offers names the API rejects the moment one is
+ * renamed or retired — with the user given no way to understand the refusal —
+ * and it ties the catalogue to whichever version happened to be published, so
+ * every catalogue change turns into a release and another pass through the
+ * community verification queue.
+ *
+ * ## Why it is measured on the artefact
+ *
+ * The same reason the rest of this gate is: a list that never ships cannot
+ * mislead anybody, and a list that ships does, whether it was written by hand,
+ * generated by the compiler or inlined by a bundler.
+ *
+ * Groups do not overlap: once one is reported the scan resumes after its last
+ * literal, so no name is counted twice. The window is measured from the FIRST
+ * literal of the group, so a list written one name per line yields one finding
+ * per `EVENT_NAME_GROUP_SPAN_LINES + 1` lines of it — a forty-name list reads as
+ * seven findings rather than forty, and a minified one as a single finding.
+ *
+ * @param {string} relative Path of the file inside the artefact, for the report.
+ * @param {string[]} lines The file, comments stripped, split by line.
+ */
+function scanForFrozenEventLists(relative, lines, report) {
+	/** @type {Array<{name: string, line: number}>} */
+	const occurrences = [];
+
+	lines.forEach((line, index) => {
+		for (const name of eventNameLiteralsOn(line)) {
+			if (EVENT_LITERAL_EXCEPTION_KEYS.has(`${relative}|${name}`)) {
+				continue;
+			}
+			occurrences.push({ name, line: index + 1 });
+		}
+	});
+
+	let start = 0;
+	while (start < occurrences.length) {
+		let end = start;
+		const names = new Set([occurrences[start].name]);
+
+		while (
+			end + 1 < occurrences.length &&
+			occurrences[end + 1].line - occurrences[start].line <= EVENT_NAME_GROUP_SPAN_LINES
+		) {
+			end += 1;
+			names.add(occurrences[end].name);
+		}
+
+		if (names.size < EVENT_NAME_GROUP_THRESHOLD) {
+			start += 1;
+			continue;
+		}
+
+		const span = occurrences[end].line - occurrences[start].line + 1;
+		report(
+			relative,
+			`writes ${names.size} event names as literals within ${span} line(s) (${formatEventNames(names)}), which reads as a frozen list. ` +
+				'The trigger fills its selector from the live catalogue: a list in the artefact offers names the API rejects and ties the catalogue to the published version.',
+			occurrences[start].line,
+		);
+		start = end + 1;
+	}
+}
+
+/** Every string literal on one line whose WHOLE content is an event name. */
+function eventNameLiteralsOn(line) {
+	const names = [];
+
+	STRING_LITERAL.lastIndex = 0;
+	let match;
+	while ((match = STRING_LITERAL.exec(line)) !== null) {
+		if (EVENT_NAME_SHAPE.test(match[2])) {
+			names.push(match[2]);
+		}
+	}
+
+	return names;
+}
+
+/** The names of one group, sorted, capped so one long list stays readable. */
+function formatEventNames(names) {
+	const sorted = [...names].sort();
+	const shown = sorted.slice(0, EVENT_NAME_SAMPLE_SIZE);
+	const rest = sorted.length - shown.length;
+
+	return rest === 0 ? shown.join(', ') : `${shown.join(', ')} and ${rest} more`;
 }
 
 /** The reason a specifier is forbidden, or `undefined` when it is allowed. */
