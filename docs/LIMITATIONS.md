@@ -18,8 +18,8 @@ delivery.**
 Two independent checks produce this, and neither can be switched off from n8n:
 
 **At registration.** The destination URL must start with `https://`. The rule is
-`regex:/^https:\/\//i` on the `url` field of `POST /v1/webhook_endpoints`
-(`CreateWebhookEndpointRequest`). A `http://` address is refused when the
+`regex:/^https:\/\//i` on the `url` field of
+`POST /v1/companies/{company}/webhook-endpoints` (`CreateWebhookEndpointRequest`). A `http://` address is refused when the
 trigger tries to register it, and the workflow fails to activate with a message
 naming the cause.
 
@@ -78,10 +78,11 @@ HTTPS address as the only remedy.
 **The trigger owns its webhook destination and cannot adopt one it did not
 create, because Factuarea returns a signing secret exactly once.**
 
-`POST /v1/webhook_endpoints` returns the plaintext `secret` in its response, and
-that is the only time it exists outside Factuarea. Reading a destination back
-with `GET /v1/webhook_endpoints/{id}` returns eighteen fields and `secret` is not
-among them.
+`POST /v1/companies/{company}/webhook-endpoints` returns the plaintext `secret`
+in its response, and that is the only time it exists outside Factuarea. Reading a
+destination back with
+`GET /v1/companies/{company}/webhook-endpoints/{webhook_endpoint}` returns
+eighteen fields and `secret` is not among them.
 
 Consequences:
 

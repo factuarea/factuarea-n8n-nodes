@@ -33,6 +33,23 @@
  * guarantee, driving the real client over a doubled HTTP helper, so a
  * regression in either module surfaces here.
  *
+ * ## THIS LOADER HAS NO COMPANY, AND MUST NOT GAIN ONE
+ *
+ * Every webhook route of the public API carries a company in its path. The event
+ * catalogue does NOT: it hangs from the root of the version
+ * (`{baseUrl}/event-catalog`) because it enumerates what the product can emit,
+ * which is the same list for every company, and the API answers 404 to a
+ * catalogue request prefixed with `companies/<uuid>`.
+ *
+ * That is what keeps this file out of the re-anchoring: `listEventCatalog()`
+ * takes no company argument, nothing here reads the node's Company ID
+ * parameter, and nothing should. The consequence is worth stating because it is
+ * a feature — the picker fills itself while the Company ID field is still
+ * empty, so the user chooses events and company in either order — and because
+ * the opposite change would look like a tidy-up: adding the company "for
+ * consistency" would break the one call in this package that a company segment
+ * would make impossible.
+ *
  * ## Ordering
  *
  * Options come back sorted by name with `localeCompare(…, 'en')`. The locale is
@@ -139,6 +156,9 @@ export async function loadEventOptions(
 		const baseUrl = asText(credentials['baseUrl']) ?? DEFAULT_API_BASE_URL;
 
 		const client = createFactuareaApiClient(requesterOf(this), { baseUrl, apiKey });
+
+		// No company, by contract: the catalogue is a ROOT route. Read the header
+		// of this file before adding one here.
 		const entries = await client.listEventCatalog();
 
 		return entries

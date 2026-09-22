@@ -3,7 +3,7 @@ import { describe, it } from 'node:test';
 
 import type { INodeProperties } from 'n8n-workflow';
 
-import { LOAD_OPTIONS_METHOD_EVENT_TYPES } from '../src/client/types';
+import { LOAD_OPTIONS_METHOD_EVENT_TYPES, PARAMETER_COMPANY_ID } from '../src/client/types';
 import {
 	DEFAULT_TOLERANCE_SECONDS,
 	MAX_TOLERANCE_SECONDS,
@@ -17,8 +17,8 @@ import { factuareaTriggerProperties } from '../src/nodes/FactuareaTrigger/proper
  * the object, and every one of the failures below surfaces as a working-looking
  * node that quietly does the wrong thing.
  *
- *   - a fourth property, or a renamed one, is a parameter the node class reads
- *     back as `undefined`;
+ *   - a fifth property, or a renamed one, is a parameter nothing reads back, and
+ *     a missing one is read as `undefined`;
  *   - a missing or misspelled `loadOptionsMethod` is an event picker that opens
  *     empty, with no error anywhere;
  *   - a tolerance without bounds accepts 0 (rejects every delivery) or a value
@@ -35,15 +35,54 @@ function property(name: string): INodeProperties {
 }
 
 describe('factuareaTriggerProperties', () => {
-	it('declares exactly three properties, with the three frozen names', () => {
-		// Three is a contract, not a coincidence: `src/client/types.ts` enumerates
-		// these names as the ones the trigger reads back, so a fourth parameter
-		// here is one nothing consumes, and a missing one is a read of `undefined`.
-		assert.equal(factuareaTriggerProperties.length, 3);
+	it('declares exactly four properties, with the four frozen names', () => {
+		// Four is a contract, not a coincidence: `src/client/types.ts` enumerates
+		// these names as the ones the trigger reads back, so a fifth parameter
+		// here is one nothing consumes, and a missing one is a read of
+		// `undefined`. The order is part of it: the company is the first decision,
+		// and the editor renders them in this order.
+		assert.equal(factuareaTriggerProperties.length, 4);
 		assert.deepEqual(
 			factuareaTriggerProperties.map((declared) => declared.name),
-			['events', 'toleranceSeconds', 'deduplicate'],
+			['companyId', 'events', 'toleranceSeconds', 'deduplicate'],
 		);
+	});
+
+	it('asks for the company as a text field, under the frozen name', () => {
+		const company = property(PARAMETER_COMPANY_ID);
+
+		// Compared against the exported constant rather than a literal: the
+		// lifecycle reads the parameter back with that same constant, and a
+		// rename on one side alone is a value read as `undefined` while the
+		// editor shows it filled in.
+		assert.equal(company.name, PARAMETER_COMPANY_ID);
+		assert.equal(company.type, 'string');
+		assert.equal(company.default, '');
+
+		// No `loadOptions` here on purpose: listing the companies a key can see
+		// is a call on the account axis, which a company-scoped key cannot make.
+		assert.equal(company.typeOptions?.loadOptionsMethod, undefined);
+		assert.equal(company.options, undefined);
+	});
+
+	it('does not mark the company required, because the credential may carry it', () => {
+		// `required: true` plus an empty value is a node issue in n8n, and the
+		// issue blocks activation. The README, the field description and the
+		// lifecycle all offer the credential's default company as the other way
+		// to fill this in, so marking it required here would make that path
+		// unusable. What rejects an empty company on both sides is
+		// `ERROR_COMPANY_NOT_SELECTED`, which names the two fields.
+		assert.notEqual(property(PARAMETER_COMPANY_ID).required, true);
+	});
+
+	it('tells the user the company is a uuid and that it is not guessed for them', () => {
+		const description = property(PARAMETER_COMPANY_ID).description ?? '';
+
+		// Both halves are the reason this field exists. A tax id in this box
+		// produces a 404 that names nothing, and a user who expects the node to
+		// pick a company would read an empty field as "the default one".
+		assert.match(description, /UUID/);
+		assert.match(description, /path/);
 	});
 
 	it('offers the events as a multi-select filled by the frozen load-options method', () => {

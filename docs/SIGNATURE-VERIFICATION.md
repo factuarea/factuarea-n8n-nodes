@@ -170,8 +170,9 @@ It is worth distinguishing two rejection causes when you report them:
 ## 8. Secret rotation
 
 Factuarea returns a destination's plaintext secret **exactly once**, in the
-response to `POST /v1/webhook_endpoints`. Reading the destination back never
-returns it.
+response to `POST /v1/companies/{company}/webhook-endpoints`, where `{company}`
+is the UUID of the company that owns the destination. Reading the destination
+back never returns it.
 
 When a secret is rotated, Factuarea signs each delivery with **both** the new and
 the previous secret for a **24-hour grace window**, so a correctly written

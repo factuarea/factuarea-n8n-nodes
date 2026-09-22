@@ -4,6 +4,52 @@ All notable changes to `n8n-nodes-factuarea` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the package
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased — the company axis (BREAKING)
+
+**Every webhook route of the Factuarea public API now carries the company in its
+path, so this node no longer works against the published API until it is
+released.** The routes this package used —
+`/v1/webhook_endpoints` and `/v1/webhook_endpoints/{id}` — answer `404`: the
+resource moved under `companies/{company}` and its name is now spelled with a
+hyphen. Factuarea used to resolve the company from the API key on its own, and
+it no longer does, which is why the node has to be told which one to work on.
+
+This entry describes work on a branch. Nothing is published yet, and the
+publication step is described in `docs/PULL-REQUEST-COMPANY-AXIS.md`.
+
+### Changed
+
+- The client builds `POST /v1/companies/{company}/webhook-endpoints`,
+  `GET /v1/companies/{company}/webhook-endpoints/{webhook_endpoint}` and
+  `DELETE /v1/companies/{company}/webhook-endpoints/{webhook_endpoint}`. The
+  three operations take the company UUID as their first argument; the company is
+  escaped, so a pasted value cannot compose another route.
+- `src/client/types.ts`, `docs/LIMITATIONS.md`, `docs/SIGNATURE-VERIFICATION.md`
+  and `README.md` describe those forms and no longer show the old ones.
+
+### Added
+
+- **Company ID**, a required parameter of the trigger, first in the editor. It
+  holds the company UUID from Factuarea (Settings, Companies), never a tax id.
+- **Default Company ID**, an optional credential field, used when a trigger
+  leaves its own field empty, so an account with a single company types it once.
+- A catalogued message for the case where neither is filled. The trigger refuses
+  to activate, and refuses to deactivate without removing its destination,
+  instead of picking a company nobody chose.
+
+### Unchanged, on purpose
+
+- `GET /v1/event-catalog` keeps hanging from the root of the version, with no
+  company segment: it enumerates what the product can emit, which is the same
+  list for every company. The event picker and the credential test therefore
+  still work before any company has been chosen, and a re-anchoring that pushed
+  a company in front of every route would break both.
+- The base URL of the credential still stops at `/v1`. Putting a company in it
+  would break the catalogue and the credential test, which hang from that same
+  root.
+- The signature, the deduplication, the delivery answers and the shape of the
+  emitted item.
+
 ## 0.1.2 — 2026-09-05
 
 - `package.json` declares `author.name` (Factuarea), required by the official n8n community node scan (`community-package-json-author-name-missing`). No functional change.

@@ -27,6 +27,15 @@ import type {
 const API_KEY = 'fk_live_thisisnotarealkey';
 const ENDPOINT_ID = '019251c0-0000-7000-8000-00000000abcd';
 
+/**
+ * The company whose destinations the three endpoint operations address.
+ *
+ * A uuid, because that is what the `{company}` segment of the public API
+ * matches (`whereUuid('company')`). A tax id here would be the mistake the node
+ * exists to make impossible.
+ */
+const COMPANY_ID = '019251c0-0000-7000-8000-00000000fa01';
+
 /** One programmed answer: either what the helper resolves with, or what it throws. */
 type Programmed = { readonly resolve: unknown } | { readonly reject: unknown };
 
@@ -121,7 +130,7 @@ describe('createFactuareaApiClient — request shape', () => {
 			answer(201, { data: endpointResource({ secret: 'whsec_0123456789abcdef0123456789abcdef' }) }),
 		);
 
-		const created = await client(double).createWebhookEndpoint({
+		const created = await client(double).createWebhookEndpoint(COMPANY_ID, {
 			url: 'https://n8n.example.com/webhook/factuarea',
 			enabled_events: ['invoice.paid', 'invoice.created'],
 			description: 'n8n trigger',
@@ -129,7 +138,10 @@ describe('createFactuareaApiClient — request shape', () => {
 
 		const call = onlyCall(double);
 		assert.equal(call.method, 'POST');
-		assert.equal(call.url, 'https://api.factuarea.com/v1/webhook_endpoints');
+		assert.equal(
+			call.url,
+			`https://api.factuarea.com/v1/companies/${COMPANY_ID}/webhook-endpoints`,
+		);
 		assert.equal(call.headers['Authorization'], `Bearer ${API_KEY}`);
 		assert.equal(call.headers['Content-Type'], 'application/json');
 		assert.equal(call.json, true);
@@ -157,11 +169,14 @@ describe('createFactuareaApiClient — request shape', () => {
 	it('reads a destination with GET on its own path', async () => {
 		const double = helperDouble(answer(200, { data: endpointResource() }));
 
-		const found = await client(double).getWebhookEndpoint(ENDPOINT_ID);
+		const found = await client(double).getWebhookEndpoint(COMPANY_ID, ENDPOINT_ID);
 
 		const call = onlyCall(double);
 		assert.equal(call.method, 'GET');
-		assert.equal(call.url, `https://api.factuarea.com/v1/webhook_endpoints/${ENDPOINT_ID}`);
+		assert.equal(
+			call.url,
+			`https://api.factuarea.com/v1/companies/${COMPANY_ID}/webhook-endpoints/${ENDPOINT_ID}`,
+		);
 		assert.equal(call.headers['Authorization'], `Bearer ${API_KEY}`);
 		assert.equal(call.body, undefined, 'a read must not carry a body');
 		assert.equal(found?.id, ENDPOINT_ID);
@@ -170,11 +185,14 @@ describe('createFactuareaApiClient — request shape', () => {
 	it('removes a destination with DELETE and accepts the empty 204 answer', async () => {
 		const double = helperDouble(answer(204, undefined));
 
-		await client(double).deleteWebhookEndpoint(ENDPOINT_ID);
+		await client(double).deleteWebhookEndpoint(COMPANY_ID, ENDPOINT_ID);
 
 		const call = onlyCall(double);
 		assert.equal(call.method, 'DELETE');
-		assert.equal(call.url, `https://api.factuarea.com/v1/webhook_endpoints/${ENDPOINT_ID}`);
+		assert.equal(
+			call.url,
+			`https://api.factuarea.com/v1/companies/${COMPANY_ID}/webhook-endpoints/${ENDPOINT_ID}`,
+		);
 		assert.equal(call.headers['Authorization'], `Bearer ${API_KEY}`);
 	});
 
@@ -206,6 +224,100 @@ describe('createFactuareaApiClient — request shape', () => {
 	});
 });
 
+describe('createFactuareaApiClient — the company axis of the three endpoint calls', () => {
+	/**
+	 * The three paths, written out in full rather than composed.
+	 *
+	 * Composing them from the same helper the client uses would pin nothing: the
+	 * point of this test is that the STRING the published API answers to is the
+	 * one this package builds, so the expectation is a literal, spelled with the
+	 * company segment in front and the resource in a HYPHEN. The underscore form
+	 * this replaces now answers 404.
+	 */
+	const CREATE_PATH =
+		'https://api.factuarea.com/v1/companies/019251c0-0000-7000-8000-00000000fa01/webhook-endpoints';
+	const ONE_ENDPOINT_PATH = `${CREATE_PATH}/019251c0-0000-7000-8000-00000000abcd`;
+
+	it('registers on the frozen company path', async () => {
+		const double = helperDouble(answer(201, { data: endpointResource({ secret: 'whsec_a' }) }));
+
+		await client(double).createWebhookEndpoint(COMPANY_ID, {
+			url: 'https://n8n.example.com/webhook/factuarea',
+			enabled_events: ['invoice.paid'],
+		});
+
+		assert.equal(onlyCall(double).url, CREATE_PATH);
+	});
+
+	it('reads on the frozen company path', async () => {
+		const double = helperDouble(answer(200, { data: endpointResource() }));
+
+		await client(double).getWebhookEndpoint(COMPANY_ID, ENDPOINT_ID);
+
+		assert.equal(onlyCall(double).url, ONE_ENDPOINT_PATH);
+	});
+
+	it('removes on the frozen company path', async () => {
+		const double = helperDouble(answer(204, undefined));
+
+		await client(double).deleteWebhookEndpoint(COMPANY_ID, ENDPOINT_ID);
+
+		assert.equal(onlyCall(double).url, ONE_ENDPOINT_PATH);
+	});
+
+	it('leaves no underscore form of the resource anywhere in the three paths', async () => {
+		const double = helperDouble(
+			answer(201, { data: endpointResource({ secret: 'whsec_a' }) }),
+			answer(200, { data: endpointResource() }),
+			answer(204, undefined),
+		);
+		const api = client(double);
+
+		await api.createWebhookEndpoint(COMPANY_ID, {
+			url: 'https://n8n.example.com/webhook/factuarea',
+			enabled_events: ['invoice.paid'],
+		});
+		await api.getWebhookEndpoint(COMPANY_ID, ENDPOINT_ID);
+		await api.deleteWebhookEndpoint(COMPANY_ID, ENDPOINT_ID);
+
+		assert.equal(double.calls.length, 3);
+
+		for (const call of double.calls) {
+			// Both halves matter. The first is the route that no longer exists;
+			// the second is the company segment, whose absence is what made the
+			// old route work and what makes the new one 404.
+			assert.doesNotMatch(call.url, /webhook_endpoints/, call.url);
+			assert.match(call.url, /\/companies\/019251c0-0000-7000-8000-00000000fa01\//, call.url);
+		}
+	});
+
+	it('escapes the company so a pasted value cannot compose another route', async () => {
+		const double = helperDouble(answer(200, { data: endpointResource() }));
+
+		await client(double).getWebhookEndpoint('../accounts/somebody-else', ENDPOINT_ID);
+
+		// A uuid never needs escaping; a pasted mistake does, and a path that
+		// climbed out of the company segment would be answered by a route the
+		// user never meant to call.
+		assert.equal(
+			onlyCall(double).url,
+			`https://api.factuarea.com/v1/companies/..%2Faccounts%2Fsomebody-else/webhook-endpoints/${ENDPOINT_ID}`,
+		);
+	});
+
+	it('keeps the event catalogue on the root, with no company segment and no company argument', async () => {
+		const double = helperDouble(answer(200, { data: [] }));
+
+		// The signature itself is the guarantee: there is nowhere to pass a
+		// company, so no caller can prefix this route by accident.
+		await client(double).listEventCatalog();
+
+		const call = onlyCall(double);
+		assert.equal(call.url, 'https://api.factuarea.com/v1/event-catalog');
+		assert.doesNotMatch(call.url, /companies/, call.url);
+	});
+});
+
 /** RFC 4122 version 4, which is what `crypto.randomUUID()` produces. */
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
@@ -215,7 +327,7 @@ describe('createFactuareaApiClient — idempotency key on the writes', () => {
 			answer(201, { data: endpointResource({ secret: 'whsec_0123456789abcdef0123456789abcdef' }) }),
 		);
 
-		await client(double).createWebhookEndpoint({
+		await client(double).createWebhookEndpoint(COMPANY_ID, {
 			url: 'https://n8n.example.com/webhook/factuarea',
 			enabled_events: ['invoice.paid'],
 		});
@@ -233,7 +345,7 @@ describe('createFactuareaApiClient — idempotency key on the writes', () => {
 		// answers 422 and DEACTIVATING a workflow starts failing.
 		const double = helperDouble(answer(204, undefined));
 
-		await client(double).deleteWebhookEndpoint(ENDPOINT_ID);
+		await client(double).deleteWebhookEndpoint(COMPANY_ID, ENDPOINT_ID);
 
 		const key = onlyCall(double).headers['Idempotency-Key'];
 		assert.ok(key !== undefined, 'the removal write must carry an idempotency key');
@@ -251,8 +363,8 @@ describe('createFactuareaApiClient — idempotency key on the writes', () => {
 		const api = client(double);
 		const input = { url: 'https://n8n.example.com/webhook/factuarea', enabled_events: ['invoice.paid'] };
 
-		await api.createWebhookEndpoint(input);
-		await api.createWebhookEndpoint(input);
+		await api.createWebhookEndpoint(COMPANY_ID, input);
+		await api.createWebhookEndpoint(COMPANY_ID, input);
 
 		assert.equal(double.calls.length, 2);
 		const [first, second] = double.calls;
@@ -262,7 +374,7 @@ describe('createFactuareaApiClient — idempotency key on the writes', () => {
 
 	it('does not put a key on the reads, which have nothing to replay', async () => {
 		const readDouble = helperDouble(answer(200, { data: endpointResource() }));
-		await client(readDouble).getWebhookEndpoint(ENDPOINT_ID);
+		await client(readDouble).getWebhookEndpoint(COMPANY_ID, ENDPOINT_ID);
 		assert.equal(onlyCall(readDouble).headers['Idempotency-Key'], undefined);
 
 		const catalogueDouble = helperDouble(answer(200, { data: [] }));
@@ -285,7 +397,7 @@ describe('createFactuareaApiClient — failure translation', () => {
 		);
 
 		await assert.rejects(
-			client(double).createWebhookEndpoint({ url: 'https://10.0.0.4/hook', enabled_events: ['invoice.paid'] }),
+			client(double).createWebhookEndpoint(COMPANY_ID, { url: 'https://10.0.0.4/hook', enabled_events: ['invoice.paid'] }),
 			(error: unknown) => error instanceof Error && error.message === ERROR_ENDPOINT_URL_NOT_ACCEPTED,
 		);
 	});
@@ -304,7 +416,7 @@ describe('createFactuareaApiClient — failure translation', () => {
 		);
 
 		await assert.rejects(
-			client(double).createWebhookEndpoint({ url: 'http://n8n.example.com/hook', enabled_events: ['invoice.paid'] }),
+			client(double).createWebhookEndpoint(COMPANY_ID, { url: 'http://n8n.example.com/hook', enabled_events: ['invoice.paid'] }),
 			(error: unknown) => error instanceof Error && error.message === ERROR_ENDPOINT_URL_NOT_ACCEPTED,
 		);
 	});
@@ -323,7 +435,7 @@ describe('createFactuareaApiClient — failure translation', () => {
 		);
 
 		await assert.rejects(
-			client(double).createWebhookEndpoint({ url: 'https://n8n.example.com/hook', enabled_events: ['invoice.paid'] }),
+			client(double).createWebhookEndpoint(COMPANY_ID, { url: 'https://n8n.example.com/hook', enabled_events: ['invoice.paid'] }),
 			(error: unknown) => error instanceof Error && error.message === ERROR_ENDPOINT_LIMIT_REACHED,
 		);
 	});
@@ -341,7 +453,7 @@ describe('createFactuareaApiClient — failure translation', () => {
 		);
 
 		await assert.rejects(
-			client(double).createWebhookEndpoint({ url: 'https://n8n.example.com/hook', enabled_events: ['invoice.paid'] }),
+			client(double).createWebhookEndpoint(COMPANY_ID, { url: 'https://n8n.example.com/hook', enabled_events: ['invoice.paid'] }),
 			(error: unknown) =>
 				error instanceof Error &&
 				error.message !== ERROR_ENDPOINT_LIMIT_REACHED &&
@@ -365,7 +477,7 @@ describe('createFactuareaApiClient — failure translation', () => {
 		);
 
 		await assert.rejects(
-			client(double).createWebhookEndpoint({ url: 'https://n8n.example.com/hook', enabled_events: [] }),
+			client(double).createWebhookEndpoint(COMPANY_ID, { url: 'https://n8n.example.com/hook', enabled_events: [] }),
 			(error: unknown) => error instanceof Error && error.message === ERROR_NO_EVENTS_SELECTED,
 		);
 	});
@@ -385,7 +497,7 @@ describe('createFactuareaApiClient — failure translation', () => {
 		);
 
 		await assert.rejects(
-			client(double).createWebhookEndpoint({ url: 'https://n8n.example.com/hook', enabled_events: ['invoice.imagined'] }),
+			client(double).createWebhookEndpoint(COMPANY_ID, { url: 'https://n8n.example.com/hook', enabled_events: ['invoice.imagined'] }),
 			(error: unknown) =>
 				error instanceof Error &&
 				error.message !== ERROR_NO_EVENTS_SELECTED &&
@@ -403,7 +515,7 @@ describe('createFactuareaApiClient — failure translation', () => {
 		);
 
 		await assert.rejects(
-			client(double).createWebhookEndpoint({ url: 'https://n8n.example.com/hook', enabled_events: ['invoice.paid'] }),
+			client(double).createWebhookEndpoint(COMPANY_ID, { url: 'https://n8n.example.com/hook', enabled_events: ['invoice.paid'] }),
 			(error: unknown) => error instanceof Error && error.message === ERROR_INSUFFICIENT_SCOPE,
 		);
 	});
@@ -435,7 +547,7 @@ describe('createFactuareaApiClient — failure translation', () => {
 		);
 
 		await assert.rejects(
-			client(double).createWebhookEndpoint({ url: 'https://n8n.example.com/hook', enabled_events: ['invoice.paid'] }),
+			client(double).createWebhookEndpoint(COMPANY_ID, { url: 'https://n8n.example.com/hook', enabled_events: ['invoice.paid'] }),
 			(error: unknown) => error instanceof Error && error.message === ERROR_ENDPOINT_GONE,
 		);
 	});
@@ -451,7 +563,7 @@ describe('createFactuareaApiClient — failure translation', () => {
 			}),
 		);
 
-		assert.equal(await client(double).getWebhookEndpoint(ENDPOINT_ID), null);
+		assert.equal(await client(double).getWebhookEndpoint(COMPANY_ID, ENDPOINT_ID), null);
 	});
 
 	it('treats a missing destination as a successful removal', async () => {
@@ -465,7 +577,7 @@ describe('createFactuareaApiClient — failure translation', () => {
 			}),
 		);
 
-		await client(double).deleteWebhookEndpoint(ENDPOINT_ID);
+		await client(double).deleteWebhookEndpoint(COMPANY_ID, ENDPOINT_ID);
 		assert.equal(double.calls.length, 1);
 	});
 
@@ -496,7 +608,7 @@ describe('createFactuareaApiClient — nothing of the response reaches the messa
 		);
 
 		await assert.rejects(
-			client(double).createWebhookEndpoint({ url: 'https://n8n.example.com/hook', enabled_events: ['invoice.paid'] }),
+			client(double).createWebhookEndpoint(COMPANY_ID, { url: 'https://n8n.example.com/hook', enabled_events: ['invoice.paid'] }),
 			(error: unknown) => {
 				assert.ok(error instanceof Error);
 				assert.ok(error.message.includes('HTTP 409'), 'the status is worth reporting');
@@ -513,7 +625,7 @@ describe('createFactuareaApiClient — nothing of the response reaches the messa
 		const double = helperDouble(answer(500, { error: { code: 'internal_error', message: 'Error.' } }));
 
 		await assert.rejects(
-			client(double).createWebhookEndpoint({ url: 'https://n8n.example.com/hook', enabled_events: ['invoice.paid'] }),
+			client(double).createWebhookEndpoint(COMPANY_ID, { url: 'https://n8n.example.com/hook', enabled_events: ['invoice.paid'] }),
 			(error: unknown) => error instanceof Error && !error.message.includes(API_KEY),
 		);
 	});
@@ -535,7 +647,7 @@ describe('createFactuareaApiClient — helpers that throw instead of reporting t
 		const double = helperDouble({ reject: thrown });
 
 		await assert.rejects(
-			client(double).createWebhookEndpoint({ url: 'https://n8n.example.com/hook', enabled_events: ['invoice.paid'] }),
+			client(double).createWebhookEndpoint(COMPANY_ID, { url: 'https://n8n.example.com/hook', enabled_events: ['invoice.paid'] }),
 			(error: unknown) => error instanceof Error && error.message === ERROR_INSUFFICIENT_SCOPE,
 		);
 	});
@@ -548,7 +660,7 @@ describe('createFactuareaApiClient — helpers that throw instead of reporting t
 		const double = helperDouble({ reject: thrown });
 
 		await assert.rejects(
-			client(double).createWebhookEndpoint({ url: 'https://127.0.0.1/hook', enabled_events: ['invoice.paid'] }),
+			client(double).createWebhookEndpoint(COMPANY_ID, { url: 'https://127.0.0.1/hook', enabled_events: ['invoice.paid'] }),
 			(error: unknown) => error instanceof Error && error.message === ERROR_ENDPOINT_URL_NOT_ACCEPTED,
 		);
 	});
@@ -559,7 +671,7 @@ describe('createFactuareaApiClient — helpers that throw instead of reporting t
 		const double = helperDouble({ reject: Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' }) });
 
 		await assert.rejects(
-			client(double).getWebhookEndpoint(ENDPOINT_ID),
+			client(double).getWebhookEndpoint(COMPANY_ID, ENDPOINT_ID),
 			(error: unknown) =>
 				error instanceof Error &&
 				error.message.includes('did not reach Factuarea') &&
@@ -580,7 +692,7 @@ describe('createFactuareaApiClient — helpers that throw instead of reporting t
 		const double = helperDouble({ reject: Object.assign(new Error('socket hang up'), { code: 'ETIMEDOUT' }) });
 
 		await assert.rejects(
-			client(double).createWebhookEndpoint({ url: 'https://n8n.example.com/hook', enabled_events: ['invoice.paid'] }),
+			client(double).createWebhookEndpoint(COMPANY_ID, { url: 'https://n8n.example.com/hook', enabled_events: ['invoice.paid'] }),
 			(error: unknown) =>
 				error instanceof Error &&
 				// The claim it must NOT make.
@@ -601,7 +713,7 @@ describe('createFactuareaApiClient — answers the node cannot use', () => {
 		const double = helperDouble(answer(201, { data: endpointResource() }));
 
 		await assert.rejects(
-			client(double).createWebhookEndpoint({ url: 'https://n8n.example.com/hook', enabled_events: ['invoice.paid'] }),
+			client(double).createWebhookEndpoint(COMPANY_ID, { url: 'https://n8n.example.com/hook', enabled_events: ['invoice.paid'] }),
 			(error: unknown) => error instanceof Error && error.message.includes('does not recognise'),
 		);
 	});
@@ -610,7 +722,7 @@ describe('createFactuareaApiClient — answers the node cannot use', () => {
 		const double = helperDouble(answer(201, { id: ENDPOINT_ID, secret: 'whsec_x' }));
 
 		await assert.rejects(
-			client(double).createWebhookEndpoint({ url: 'https://n8n.example.com/hook', enabled_events: ['invoice.paid'] }),
+			client(double).createWebhookEndpoint(COMPANY_ID, { url: 'https://n8n.example.com/hook', enabled_events: ['invoice.paid'] }),
 			(error: unknown) => error instanceof Error && error.message.includes('does not recognise'),
 		);
 	});

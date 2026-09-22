@@ -114,13 +114,23 @@
  * file, so it is the compiler and not this comment that keeps the four operations
  * honest.
  *
+ * THE COMPANY TRAVELS PER CALL, NOT IN THE OPTIONS. The three webhook-endpoint
+ * operations take the company uuid as their FIRST argument, because the fourth
+ * operation — the event catalogue — hangs from the root of the version and must
+ * not gain a company segment. Putting the company in
+ * `FactuareaApiClientOptions` would make one client instance mean two different
+ * addressing rules, and the catalogue is the one that would break.
+ *
  * ## `src/nodes/FactuareaTrigger/properties.ts`
  *
  *     export const factuareaTriggerProperties: INodeProperties[];
  *
- * Exactly three properties, whose parameter names the trigger reads back and
+ * Exactly four properties, whose parameter names the trigger reads back and
  * therefore cannot be renamed by one side alone:
  *
+ *     'companyId'         string, required     — uuid of the company whose
+ *                         webhook destinations this trigger manages, exported
+ *                         below as PARAMETER_COMPANY_ID
  *     'events'            multi-select, string[]  — subscribed event names
  *     'toleranceSeconds'  number, default DEFAULT_TOLERANCE_SECONDS,
  *                         min MIN_TOLERANCE_SECONDS, max MAX_TOLERANCE_SECONDS
@@ -150,6 +160,11 @@
  *
  *     'webhookEndpointId'  string — uuid of the destination this trigger owns
  *     'webhookSecret'      string — the plaintext secret, returned only at creation
+ *
+ * All three read the company uuid with `getNodeParameter(PARAMETER_COMPANY_ID)`
+ * and hand it to the client, so every webhook-endpoint request they build
+ * carries the company segment. None of them falls back to letting the API pick
+ * a company.
  */
 
 /** Key under which the trigger stores the uuid of the destination it owns. */
@@ -160,6 +175,30 @@ export const STATIC_DATA_SECRET = 'webhookSecret';
 
 /** Name of the load-options method that fills the event picker. */
 export const LOAD_OPTIONS_METHOD_EVENT_TYPES = 'getEventTypes';
+
+/**
+ * Name of the node parameter holding the company uuid.
+ *
+ * Frozen here rather than written twice because `properties.ts` declares the
+ * parameter and `webhookLifecycle.ts` reads it back, and the two are written by
+ * different phases: a typo on either side would produce a trigger that reads
+ * `undefined`, refuses to activate, and blames a field that is filled in.
+ *
+ * The value is the company UUID, never a tax id: the public API matches this
+ * path segment with `whereUuid('company')`.
+ */
+export const PARAMETER_COMPANY_ID = 'companyId';
+
+/**
+ * Name of the credential field holding the fallback company uuid.
+ *
+ * The credential carries a company so an account that works with a single
+ * company fills it once instead of once per workflow. It is a value the
+ * integrator TYPES, never one derived from whoever owns the key: the resolution
+ * this package refuses is the old one, where a path without a company segment
+ * let the API choose on its own.
+ */
+export const CREDENTIAL_FIELD_COMPANY_ID = 'companyId';
 
 /**
  * A webhook destination as the v1 API returns it on read.
@@ -198,8 +237,8 @@ export interface WebhookEndpointV1 {
 /**
  * The creation response: the same eighteen keys plus the plaintext secret.
  *
- * Returned by `POST /v1/webhook_endpoints` and by the rotate-secret call, and by
- * nothing else. Whatever reads this MUST persist `secret` immediately; there is
+ * Returned by `POST /v1/companies/{company}/webhook-endpoints` and by the
+ * rotate-secret call, and by nothing else. Whatever reads this MUST persist `secret` immediately; there is
  * no second chance to obtain it.
  */
 export interface WebhookEndpointWithSecretV1 extends WebhookEndpointV1 {
@@ -208,6 +247,11 @@ export interface WebhookEndpointWithSecretV1 extends WebhookEndpointV1 {
 
 /**
  * One entry of the public event catalogue, from `GET /v1/event-catalog`.
+ *
+ * That path is the ROOT of the version and carries NO company segment, and it
+ * is the one route of this package that must never gain one: the catalogue
+ * enumerates what the product can emit, which is the same list for every
+ * company. Prefixing it would turn a working call into a 404.
  *
  * `status` is what makes the live catalogue worth reading: an entry marked
  * `coming_soon` is announced but not yet emitted, and subscribing to it is
@@ -225,7 +269,11 @@ export interface EventCatalogEntryV1 {
 	status: 'available' | 'coming_soon';
 }
 
-/** Body of `POST /v1/webhook_endpoints`, restricted to what this node sends. */
+/**
+ * Body of `POST /v1/companies/{company}/webhook-endpoints`, restricted to what
+ * this node sends. The company is NOT a field of the body: it is a segment of
+ * the path, and the client takes it as an argument of its own.
+ */
 export interface CreateWebhookEndpointInput {
 	/** Must be `https://` and resolve on the public internet. */
 	url: string;
@@ -259,7 +307,15 @@ export type FactuareaHttpRequester = (
 
 /** What the client needs to address the API and authenticate. */
 export interface FactuareaApiClientOptions {
-	/** Base URL including the version segment, e.g. `https://api.factuarea.com/v1`. */
+	/**
+	 * Base URL including the version segment, e.g. `https://api.factuarea.com/v1`.
+	 *
+	 * It stops at the version and NEVER carries a company segment. The event
+	 * catalogue hangs from this same base with no prefix, so a base ending in
+	 * `/companies/<uuid>` would break the catalogue while fixing nothing: the
+	 * company belongs to the three webhook-endpoint calls, which take it as an
+	 * argument.
+	 */
 	baseUrl: string;
 	/** Sent as `Authorization: Bearer <apiKey>`, which the API prefers over `X-API-Key`. */
 	apiKey: string;
@@ -275,34 +331,44 @@ export interface FactuareaApiClientOptions {
  */
 export interface FactuareaApiClient {
 	/**
-	 * `POST /v1/webhook_endpoints` — scope `webhooks:write`.
+	 * `POST /v1/companies/{company}/webhook-endpoints` — scope `webhooks:write`.
+	 *
+	 * `companyId` is the uuid that fills the `{company}` segment. It is the first
+	 * argument, and not part of `input`, because it addresses the request rather
+	 * than describing the destination.
 	 *
 	 * Resolves with the destination INCLUDING its plaintext secret, which the
 	 * caller must persist at once.
 	 */
 	createWebhookEndpoint(
+		companyId: string,
 		input: CreateWebhookEndpointInput,
 	): Promise<WebhookEndpointWithSecretV1>;
 
 	/**
-	 * `GET /v1/webhook_endpoints/{id}` — scope `webhooks:read`.
+	 * `GET /v1/companies/{company}/webhook-endpoints/{webhook_endpoint}` — scope
+	 * `webhooks:read`.
 	 *
 	 * Resolves with `null` when the destination is gone (HTTP 404) rather than
 	 * rejecting: "it no longer exists" is a normal lifecycle answer, and the
-	 * trigger reacts to it by creating a new destination.
+	 * trigger reacts to it by creating a new destination. A destination that
+	 * belongs to a different company answers 404 too, which is the same
+	 * lifecycle answer and the same reaction.
 	 */
-	getWebhookEndpoint(id: string): Promise<WebhookEndpointV1 | null>;
+	getWebhookEndpoint(companyId: string, id: string): Promise<WebhookEndpointV1 | null>;
 
 	/**
-	 * `DELETE /v1/webhook_endpoints/{id}` — scope `webhooks:delete`.
+	 * `DELETE /v1/companies/{company}/webhook-endpoints/{webhook_endpoint}` —
+	 * scope `webhooks:delete`.
 	 *
 	 * Resolves normally when the destination was already gone: deactivating a
 	 * workflow twice is not an error the user should have to see.
 	 */
-	deleteWebhookEndpoint(id: string): Promise<void>;
+	deleteWebhookEndpoint(companyId: string, id: string): Promise<void>;
 
 	/**
-	 * `GET /v1/event-catalog` — scope `events:read`.
+	 * `GET /v1/event-catalog` — scope `events:read`. ROOT, no company segment,
+	 * and no `companyId` argument: see `EventCatalogEntryV1` above.
 	 *
 	 * Resolves with the entries the catalogue declares `available`, filtered by
 	 * the client. Rejects with `ERROR_EVENT_CATALOG_UNAVAILABLE` rather than

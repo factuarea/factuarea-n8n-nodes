@@ -46,10 +46,31 @@
  *
  * ## Response envelopes, measured
  *
- *   `POST /v1/webhook_endpoints`         201 `{ data: { …, secret } }`
- *   `GET  /v1/webhook_endpoints/{id}`    200 `{ data: { … } }`, 404 when gone
- *   `DELETE /v1/webhook_endpoints/{id}`  204 no content
- *   `GET  /v1/event-catalog`             200 `{ data: [ { name, category, description, status } ] }`
+ *   `POST   /v1/companies/{company}/webhook-endpoints`
+ *       201 `{ data: { …, secret } }`
+ *   `GET    /v1/companies/{company}/webhook-endpoints/{webhook_endpoint}`
+ *       200 `{ data: { … } }`, 404 when gone or when it belongs elsewhere
+ *   `DELETE /v1/companies/{company}/webhook-endpoints/{webhook_endpoint}`
+ *       204 no content
+ *   `GET    /v1/event-catalog`
+ *       200 `{ data: [ { name, category, description, status } ] }`
+ *
+ * ## The company is a PATH SEGMENT on three of the four, and on none of them by
+ * ## search-and-replace
+ *
+ * The three webhook-endpoint routes carry the company that owns the destination
+ * in their path, written `companies/{company}` and followed by a resource
+ * spelled with a HYPHEN (`webhook-endpoints`, not `webhook_endpoints`). The
+ * underscore survives only in the route NAME on the server, which is not a URL
+ * and appears nowhere here.
+ *
+ * The fourth route, the event catalogue, hangs from the ROOT of the version and
+ * takes no company at all. That asymmetry is the whole reason this file builds
+ * each URL where it is used instead of prefixing a common root: a re-anchoring
+ * that searched for the version segment and pushed a company in front of
+ * everything it found would break the catalogue — in the opposite direction to
+ * the one it was trying to fix — and there would be nothing in a diff to show
+ * it.
  *
  * The `data` envelope is required, not guessed: reading a response that lacks it
  * as if it were the resource would hand the rest of the node an object with no
@@ -387,6 +408,23 @@ function normaliseBaseUrl(baseUrl: string): string {
 	return baseUrl.replace(/\/+$/, '');
 }
 
+/**
+ * The company-scoped root of the webhook-endpoint routes.
+ *
+ * One function so the three operations cannot drift into two spellings of the
+ * same path, which is exactly what produced the underscore form this replaces.
+ * The company is escaped because it arrives from a field the user types: a
+ * pasted value carrying a slash would otherwise compose a different route
+ * altogether, and the 404 that came back would name the wrong cause.
+ *
+ * An empty company is refused BEFORE this point, by the lifecycle
+ * (`ERROR_COMPANY_NOT_SELECTED`), because composing `companies//` here would
+ * produce a 404 nobody could read.
+ */
+function webhookEndpointsUrl(baseUrl: string, companyId: string): string {
+	return `${baseUrl}/companies/${encodeURIComponent(companyId)}/webhook-endpoints`;
+}
+
 export function createFactuareaApiClient(
 	request: FactuareaHttpRequester,
 	options: FactuareaApiClientOptions,
@@ -438,11 +476,12 @@ export function createFactuareaApiClient(
 
 	return {
 		async createWebhookEndpoint(
+			companyId: string,
 			input: CreateWebhookEndpointInput,
 		): Promise<WebhookEndpointWithSecretV1> {
 			const outcome = await exchange(request, {
 				method: 'POST',
-				url: `${baseUrl}/webhook_endpoints`,
+				url: webhookEndpointsUrl(baseUrl, companyId),
 				headers: { ...writeHeaders(), 'Content-Type': 'application/json' },
 				body: input,
 				json: true,
@@ -473,10 +512,13 @@ export function createFactuareaApiClient(
 			return data as unknown as WebhookEndpointWithSecretV1;
 		},
 
-		async getWebhookEndpoint(id: string): Promise<WebhookEndpointV1 | null> {
+		async getWebhookEndpoint(
+			companyId: string,
+			id: string,
+		): Promise<WebhookEndpointV1 | null> {
 			const outcome = await exchange(request, {
 				method: 'GET',
-				url: `${baseUrl}/webhook_endpoints/${encodeURIComponent(id)}`,
+				url: `${webhookEndpointsUrl(baseUrl, companyId)}/${encodeURIComponent(id)}`,
 				headers: readHeaders,
 				json: true,
 				returnFullResponse: true,
@@ -506,10 +548,10 @@ export function createFactuareaApiClient(
 			return data as unknown as WebhookEndpointV1;
 		},
 
-		async deleteWebhookEndpoint(id: string): Promise<void> {
+		async deleteWebhookEndpoint(companyId: string, id: string): Promise<void> {
 			const outcome = await exchange(request, {
 				method: 'DELETE',
-				url: `${baseUrl}/webhook_endpoints/${encodeURIComponent(id)}`,
+				url: `${webhookEndpointsUrl(baseUrl, companyId)}/${encodeURIComponent(id)}`,
 				headers: writeHeaders(),
 				json: true,
 				returnFullResponse: true,
@@ -532,6 +574,16 @@ export function createFactuareaApiClient(
 		},
 
 		async listEventCatalog(): Promise<EventCatalogEntryV1[]> {
+			// NO COMPANY SEGMENT HERE, AND THIS OPERATION TAKES NO COMPANY
+			// ARGUMENT. The catalogue enumerates what the product can emit, which
+			// is identical for every company, so the public API publishes it at
+			// the root of the version and answers 404 to anything prefixed with
+			// `companies/<uuid>`. The three operations above gained that prefix;
+			// this one is the measured exception, and it is written out because
+			// the next re-anchoring will arrive with a search for the version
+			// segment and this line would be its first casualty. The credential
+			// test (`FactuareaApi.credentials.ts`) builds the same root path and
+			// is bound by the same rule.
 			const outcome = await exchange(request, {
 				method: 'GET',
 				url: `${baseUrl}/event-catalog`,

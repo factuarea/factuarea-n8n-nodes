@@ -16,7 +16,9 @@
  *
  * ## What this file owns, and what it deliberately does not
  *
- * Everything here is WIRING and ORDER. The parameters come from `properties.ts`,
+ * Everything here is WIRING and ORDER. The four parameters come from
+ * `properties.ts` — the Company ID selector among them, published as part of the
+ * node description here and read back by `webhookLifecycle.ts` —,
  * the event picker from `loadEventOptions.ts`, the activation and deactivation
  * from `webhookLifecycle.ts`, and the three security decisions from
  * `src/verify/` and `src/dedupe/`. This file decides which of them runs, in what
@@ -59,7 +61,18 @@ const CREDENTIAL_NAME = 'factuareaApi';
 /** The node's single webhook. `webhookLifecycle.ts` asks n8n for this URL. */
 const WEBHOOK_NAME = 'default';
 
-/** Parameter names, frozen in `src/client/types.ts` alongside `properties.ts`. */
+/**
+ * Parameter names, frozen in `src/client/types.ts` alongside `properties.ts`.
+ *
+ * Only the two this file reads are declared here. The other two parameters are
+ * read elsewhere and deliberately not duplicated: `events` and `companyId` are
+ * read by `webhookLifecycle.ts`, which is where activation and deactivation
+ * compose their requests, and the company is taken from the frozen
+ * `PARAMETER_COMPANY_ID` and handed to all three webhook-endpoint calls. The
+ * delivery path below needs neither: a delivery arrives already addressed, and
+ * the company that produced it is a fact of the event rather than a field to
+ * resolve.
+ */
 const PARAMETER_TOLERANCE = 'toleranceSeconds';
 const PARAMETER_DEDUPLICATE = 'deduplicate';
 

@@ -49,6 +49,37 @@ describe('FactuareaApi credential', () => {
 		assert.equal(baseUrl.default, 'https://api.factuarea.com/v1');
 	});
 
+	it('stops the base URL at the version segment and never swallows the company', () => {
+		const credential = new FactuareaApi();
+
+		const baseUrl = propertyNamed(credential.properties, 'baseUrl');
+		const declared = String(baseUrl.default);
+
+		// The webhook routes carry `companies/{company}` in their path, and the
+		// tempting shortcut is to paste it into this field once. It would break
+		// the two calls that hang from this base with no prefix at all: the event
+		// catalogue and the credential test below. So the default ends at the
+		// version, and nothing after it.
+		assert.equal(declared.endsWith('/v1'), true, declared);
+		assert.doesNotMatch(declared, /companies/);
+		assert.doesNotMatch(declared, /\{company\}/);
+	});
+
+	it('carries a company of its own, typed rather than inferred', () => {
+		const credential = new FactuareaApi();
+
+		const company = propertyNamed(credential.properties, 'companyId');
+
+		// It backs the node's own Company ID field for an account that works with
+		// a single company. It is NOT required: a workflow that names its company
+		// in the node needs nothing here, and a credential written before the
+		// company axis keeps working as long as the node names one.
+		assert.equal(company.type, 'string');
+		assert.equal(company.default, '');
+		assert.notEqual(company.required, true);
+		assert.notEqual(company.typeOptions?.password, true);
+	});
+
 	it('authenticates every request with a bearer header built from the key', () => {
 		const credential = new FactuareaApi();
 
@@ -72,5 +103,9 @@ describe('FactuareaApi credential', () => {
 			credential.test.request.url,
 			'={{$credentials.baseUrl}}/event-catalog',
 		);
+
+		// And it stays on the ROOT. Prefixing the one call a user presses to
+		// check their key would report every valid credential as broken.
+		assert.doesNotMatch(credential.test.request.url, /companies/);
 	});
 });

@@ -69,12 +69,13 @@ Restart n8n. **Factuarea Trigger** then appears in the node panel.
 
 ## Creating the credential
 
-The node uses one credential type, **Factuarea API**, with two fields:
+The node uses one credential type, **Factuarea API**, with three fields:
 
 | Field | What it is |
 | --- | --- |
 | **API Key** | An API key from Factuarea (**Settings > Developers > API keys**). Stored encrypted by n8n and masked in the editor. |
-| **Base URL** | Root of the Factuarea public API including the version segment. Defaults to `https://api.factuarea.com/v1`. Change it only if the key belongs to a different Factuarea environment. |
+| **Base URL** | Root of the Factuarea public API including the version segment, and nothing after it. Defaults to `https://api.factuarea.com/v1`. Change it only if the key belongs to a different Factuarea environment. **Do not put a company in it**: the event catalogue and the credential test hang from this same root, and a base URL carrying a company breaks both. |
+| **Default Company ID** | Optional. UUID of the Factuarea company this key works with, used by a trigger that leaves its own **Company ID** field empty. Fill it in when the account works with a single company, so it is typed once instead of once per workflow. |
 
 The key needs four scopes, and the trigger fails with a message naming the
 missing permission if any of them is absent:
@@ -89,6 +90,39 @@ missing permission if any of them is absent:
 Press **Test** on the credential to check it. The test performs a read-only
 `GET /v1/event-catalog`: it creates nothing, and it exercises the same scope the
 event picker needs, so a key that passes the test can actually fill the picker.
+It does **not** check the company: the catalogue is the same for every company
+(see below), so a passing test says the key works, not that the company is right.
+
+## Choosing the company
+
+Every webhook route of the Factuarea public API carries the company in its path:
+
+```
+POST   /v1/companies/{company}/webhook-endpoints
+GET    /v1/companies/{company}/webhook-endpoints/{webhook_endpoint}
+DELETE /v1/companies/{company}/webhook-endpoints/{webhook_endpoint}
+```
+
+`{company}` is the **UUID** of the company, as shown in Factuarea
+(**Settings > Companies**). It is never a tax id.
+
+So the node has a **Company ID** field, and it is the first one in the editor.
+Fill it in with that UUID, or leave it empty and put the UUID in **Default
+Company ID** on the credential; the field on the node wins when both are filled.
+With neither filled the workflow refuses to activate and the message names both
+fields — the node does not choose a company for you, and neither does Factuarea
+any more.
+
+Changing the company after the workflow has been activated points the trigger at
+a different company. Deactivate and activate it again so the destination is
+registered where the events are produced.
+
+**The event catalogue is the exception, and that is deliberate.** It stays at
+`GET /v1/event-catalog`, with no company in the path, because it enumerates what
+Factuarea can emit and that list is identical for every company. Two consequences
+you can rely on: the **Events** picker fills itself while **Company ID** is still
+empty, so the two can be filled in either order, and pressing **Test** on the
+credential works before any company has been chosen.
 
 ## Choosing events
 
@@ -116,6 +150,7 @@ with the events chosen at that moment.
 
 | Parameter | Default | What it does |
 | --- | --- | --- |
+| **Company ID** | none | UUID of the Factuarea company whose webhook destinations this trigger manages. Required, unless the credential carries a **Default Company ID**. |
 | **Events** | none | The Factuarea events that start this workflow. Required. |
 | **Timestamp Tolerance (Seconds)** | `300` | How far the timestamp signed into a delivery may sit from this instance clock, in either direction, before the delivery is rejected even though its signature is correct. Range 30 to 3600. |
 | **Skip Repeated Events** | `true` | Answer a repeated delivery of an event already processed with success and drop it, instead of producing a second item. |
@@ -131,17 +166,20 @@ deliveries are being rejected.
 Send a message to a chat channel whenever an invoice is paid.
 
 1. Add **Factuarea Trigger**. Select your Factuarea API credential.
-2. In **Events**, pick `invoice.paid`.
-3. Leave **Timestamp Tolerance** at `300` and **Skip Repeated Events** on.
-4. Connect a **Slack** (or Discord, or Gmail) node and compose the message from
+2. In **Company ID**, paste the UUID of the company from Factuarea
+   (**Settings > Companies**) — unless the credential already carries a
+   **Default Company ID**.
+3. In **Events**, pick `invoice.paid`.
+4. Leave **Timestamp Tolerance** at `300` and **Skip Repeated Events** on.
+5. Connect a **Slack** (or Discord, or Gmail) node and compose the message from
    the trigger output, for example:
 
    ```
    Invoice {{ $json.data.invoice.number }} was paid.
    ```
 
-5. **Activate** the workflow. Activation registers the webhook destination in
-   Factuarea; deactivation removes it.
+6. **Activate** the workflow. Activation registers the webhook destination in
+   Factuarea, on the company you named; deactivation removes it.
 
 To exercise the whole path without waiting for a real event, use Factuarea's
 test delivery: **Settings > Developers > Webhooks**, pick the destination the
@@ -227,6 +265,7 @@ The same procedure is documented by Factuarea at
 | [docs/RELEASING.md](docs/RELEASING.md) | How a version of this package is published, including the manual npm step. |
 | [docs/ENGLISH-ONLY.md](docs/ENGLISH-ONLY.md) | Why this repository is written in English while the rest of Factuarea is not. |
 | [docs/MCP-REGISTRY.md](docs/MCP-REGISTRY.md) | The decision on listing the Factuarea MCP server in n8n's MCP servers registry. |
+| [docs/PULL-REQUEST-COMPANY-AXIS.md](docs/PULL-REQUEST-COMPANY-AXIS.md) | The review and release note for the company-axis change: what it breaks, what to check, and the publication step, which is not performed here. |
 | [CHANGELOG.md](CHANGELOG.md) | What each version contains. |
 
 ## Support

@@ -147,6 +147,38 @@ describe('loadEventOptions — what the picker offers', () => {
 		assert.equal(call.headers['Authorization'], `Bearer ${API_KEY}`);
 	});
 
+	it('asks for the catalogue on the ROOT, with no company segment', async () => {
+		const double = withCatalogue(catalogue(entry('invoice.paid', 'available')));
+
+		await loadEventOptions.call(double.context);
+
+		const call = onlyCall(double);
+
+		// The three webhook-endpoint routes carry `companies/{company}`; this one
+		// must not. The catalogue enumerates what the product can emit, the API
+		// publishes it at the root of the version, and a prefixed request is a
+		// 404 that empties the picker for every workflow at once. The loader also
+		// reads no company parameter, so there is nothing here that could grow
+		// one by accident.
+		assert.doesNotMatch(call.url, /companies/, call.url);
+		assert.equal(call.url.endsWith('/v1/event-catalog'), true, call.url);
+	});
+
+	it('fills the picker while the Company ID field is still empty', async () => {
+		// The double answers no node parameter at all, which is exactly what a
+		// node with nothing configured yet looks like. Filling the picker anyway
+		// is the behaviour that lets the user pick events and company in either
+		// order, and it holds only while this loader stays on the root route.
+		const double = withCatalogue(catalogue(entry('invoice.paid', 'available')));
+
+		const options = await loadEventOptions.call(double.context);
+
+		assert.deepEqual(
+			options.map((option) => option.value),
+			['invoice.paid'],
+		);
+	});
+
 	it('sends the base URL of the credential when it is not the production one', async () => {
 		const double = loadOptionsDouble(
 			{ apiKey: API_KEY, baseUrl: 'https://sandbox.factuarea.test/v1' },

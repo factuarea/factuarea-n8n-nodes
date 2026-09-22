@@ -9,9 +9,14 @@ import {
 	deleteWebhookEndpoint,
 	factuareaWebhookMethods,
 } from '../src/nodes/FactuareaTrigger/webhookLifecycle';
-import { STATIC_DATA_ENDPOINT_ID, STATIC_DATA_SECRET } from '../src/client/types';
+import {
+	PARAMETER_COMPANY_ID,
+	STATIC_DATA_ENDPOINT_ID,
+	STATIC_DATA_SECRET,
+} from '../src/client/types';
 import type { FactuareaHttpRequestOptions } from '../src/client/types';
 import {
+	ERROR_COMPANY_NOT_SELECTED,
 	ERROR_ENDPOINT_NOT_ACTIVE,
 	ERROR_ENDPOINT_URL_MISMATCH,
 	ERROR_ENDPOINT_URL_NOT_ACCEPTED,
@@ -38,6 +43,20 @@ const SECRET = 'whsec_notarealsecret';
 const WEBHOOK_URL = 'https://n8n.example.com/webhook/019251c0';
 const EVENTS = ['invoice.created', 'invoice.paid'];
 
+/** The company the node's own field names, and the one the routes must carry. */
+const COMPANY_ID = '019251c0-0000-7000-8000-00000000fa01';
+
+/** A different company, typed into the credential rather than into the node. */
+const CREDENTIAL_COMPANY_ID = '019251c0-0000-7000-8000-00000000fb02';
+
+/** The base URL of the credential the double hands back. */
+const BASE_URL = 'https://api.factuarea.test/v1';
+
+/** The company-scoped root every webhook-endpoint request has to be built on. */
+function endpointsRoot(companyId: string): string {
+	return `${BASE_URL}/companies/${companyId}/webhook-endpoints`;
+}
+
 /** One programmed answer: what the helper resolves with, or what it throws. */
 type Programmed = { readonly resolve: unknown } | { readonly reject: unknown };
 
@@ -52,6 +71,10 @@ interface DoubleOptions {
 	/** `undefined` models n8n having no public address to hand back. */
 	readonly webhookUrl?: string | undefined;
 	readonly events?: string[];
+	/** The node's own Company ID field; `''` models it left empty. */
+	readonly companyId?: string;
+	/** The Default Company ID of the credential; absent models it left empty. */
+	readonly credentialCompanyId?: string;
 	readonly workflow?: { id?: string; name?: string };
 	readonly answers?: Programmed[];
 }
@@ -63,12 +86,27 @@ function hookDouble(options: DoubleOptions = {}): Double {
 
 	const hook = {
 		async getCredentials(): Promise<unknown> {
-			return { apiKey: 'fk_live_notarealkey', baseUrl: 'https://api.factuarea.test/v1' };
+			return {
+				apiKey: 'fk_live_notarealkey',
+				baseUrl: BASE_URL,
+				// Absent unless the test asks for it, which is the ordinary case:
+				// a credential written before this version has no company in it.
+				...('credentialCompanyId' in options
+					? { companyId: options.credentialCompanyId }
+					: {}),
+			};
 		},
 		getNodeWebhookUrl(): string | undefined {
 			return 'webhookUrl' in options ? options.webhookUrl : WEBHOOK_URL;
 		},
-		getNodeParameter(): unknown {
+		// Dispatched by NAME, not answered with one value for every parameter: the
+		// lifecycle now reads two of them, and a double that returned the event
+		// list for the company would hide exactly the wiring these tests pin.
+		getNodeParameter(name: string): unknown {
+			if (name === PARAMETER_COMPANY_ID) {
+				return options.companyId ?? COMPANY_ID;
+			}
+
 			return options.events ?? EVENTS;
 		},
 		getWorkflowStaticData(): Record<string, unknown> {
@@ -162,7 +200,7 @@ describe('checkWebhookExists', () => {
 		const call = onlyCall(double);
 
 		assert.equal(call.method, 'GET');
-		assert.ok(call.url.endsWith(`/webhook_endpoints/${ENDPOINT_ID}`), call.url);
+		assert.equal(call.url, `${endpointsRoot(COMPANY_ID)}/${ENDPOINT_ID}`);
 	});
 
 	it('answers "yes" when the stored destination still exists', async () => {
@@ -256,6 +294,9 @@ describe('createWebhookEndpoint', () => {
 		const call = onlyCall(double);
 
 		assert.equal(call.method, 'POST');
+		// The company is a segment of the path and NOT a field of the body: the
+		// request is addressed to a company, it does not describe one.
+		assert.equal(call.url, endpointsRoot(COMPANY_ID));
 		assert.deepEqual(call.body, {
 			url: WEBHOOK_URL,
 			enabled_events: EVENTS,
@@ -353,7 +394,7 @@ describe('deleteWebhookEndpoint', () => {
 		const call = onlyCall(double);
 
 		assert.equal(call.method, 'DELETE');
-		assert.ok(call.url.endsWith(`/webhook_endpoints/${ENDPOINT_ID}`), call.url);
+		assert.equal(call.url, `${endpointsRoot(COMPANY_ID)}/${ENDPOINT_ID}`);
 	});
 
 	it('does nothing and asks nothing when there is no destination to remove', async () => {
@@ -376,6 +417,127 @@ describe('deleteWebhookEndpoint', () => {
 		// Forgetting the id here would leave a live destination in Factuarea
 		// that keeps delivering and that this node can no longer name.
 		assert.equal(double.state[STATIC_DATA_ENDPOINT_ID], ENDPOINT_ID);
+	});
+});
+
+describe('the company the lifecycle works on', () => {
+	it('registers and removes on the company the node names, in both directions', async () => {
+		const creating = hookDouble({
+			answers: [answer(201, { data: { id: ENDPOINT_ID, secret: SECRET } })],
+		});
+
+		await createWebhookEndpoint.call(creating.hook);
+
+		assert.equal(onlyCall(creating).url, endpointsRoot(COMPANY_ID));
+
+		const removing = hookDouble({
+			state: { [STATIC_DATA_ENDPOINT_ID]: ENDPOINT_ID, [STATIC_DATA_SECRET]: SECRET },
+			answers: [answer(204, undefined)],
+		});
+
+		await deleteWebhookEndpoint.call(removing.hook);
+
+		// Creation and removal on the same company: a create on one company and a
+		// delete on another would leave a live destination behind on every
+		// deactivation.
+		assert.equal(onlyCall(removing).url, `${endpointsRoot(COMPANY_ID)}/${ENDPOINT_ID}`);
+	});
+
+	it('falls back to the company typed into the credential, and only to that', async () => {
+		const double = hookDouble({
+			companyId: '',
+			credentialCompanyId: CREDENTIAL_COMPANY_ID,
+			answers: [answer(201, { data: { id: ENDPOINT_ID, secret: SECRET } })],
+		});
+
+		await createWebhookEndpoint.call(double.hook);
+
+		assert.equal(onlyCall(double).url, endpointsRoot(CREDENTIAL_COMPANY_ID));
+	});
+
+	it('prefers the node field over the credential when both are filled', async () => {
+		const double = hookDouble({
+			credentialCompanyId: CREDENTIAL_COMPANY_ID,
+			answers: [answer(201, { data: { id: ENDPOINT_ID, secret: SECRET } })],
+		});
+
+		await createWebhookEndpoint.call(double.hook);
+
+		// The field next to the activation switch wins: it is the one the user
+		// was looking at when they activated.
+		assert.equal(onlyCall(double).url, endpointsRoot(COMPANY_ID));
+	});
+
+	it('trims a pasted company instead of composing a path with a space in it', async () => {
+		const double = hookDouble({
+			companyId: `  ${COMPANY_ID}  `,
+			answers: [answer(201, { data: { id: ENDPOINT_ID, secret: SECRET } })],
+		});
+
+		await createWebhookEndpoint.call(double.hook);
+
+		assert.equal(onlyCall(double).url, endpointsRoot(COMPANY_ID));
+	});
+
+	it('refuses to register anything when no company is named anywhere', async () => {
+		const double = hookDouble({ companyId: '' });
+
+		await assert.rejects(createWebhookEndpoint.call(double.hook), {
+			message: ERROR_COMPANY_NOT_SELECTED,
+		});
+
+		// The prohibited behaviour is not only "build a wrong path": it is
+		// resolving the company on the user's behalf. Nothing is asked of
+		// Factuarea, so nothing can answer with a company nobody chose.
+		assert.deepEqual(double.calls, []);
+		assert.deepEqual(double.state, {});
+	});
+
+	it('refuses to read the stored destination when no company is named', async () => {
+		const double = hookDouble({
+			companyId: '',
+			state: { [STATIC_DATA_ENDPOINT_ID]: ENDPOINT_ID, [STATIC_DATA_SECRET]: SECRET },
+		});
+
+		await assert.rejects(checkWebhookExists.call(double.hook), {
+			message: ERROR_COMPANY_NOT_SELECTED,
+		});
+
+		assert.deepEqual(double.calls, []);
+	});
+
+	it('refuses to remove the stored destination when no company is named, and keeps it', async () => {
+		const double = hookDouble({
+			companyId: '',
+			state: { [STATIC_DATA_ENDPOINT_ID]: ENDPOINT_ID, [STATIC_DATA_SECRET]: SECRET },
+		});
+
+		await assert.rejects(deleteWebhookEndpoint.call(double.hook), {
+			message: ERROR_COMPANY_NOT_SELECTED,
+		});
+
+		// Forgetting the identifier here would orphan a live destination that
+		// this node could no longer name. Keeping it means filling the field in
+		// and deactivating again finishes the job.
+		assert.deepEqual(double.calls, []);
+		assert.equal(double.state[STATIC_DATA_ENDPOINT_ID], ENDPOINT_ID);
+	});
+
+	it('builds no webhook route without a company segment', async () => {
+		const double = hookDouble({
+			state: { [STATIC_DATA_ENDPOINT_ID]: ENDPOINT_ID, [STATIC_DATA_SECRET]: SECRET },
+			answers: [endpointBody(), answer(204, undefined)],
+		});
+
+		await checkWebhookExists.call(double.hook);
+		await deleteWebhookEndpoint.call(double.hook);
+
+		assert.equal(double.calls.length, 2);
+
+		for (const call of double.calls) {
+			assert.match(call.url, /\/companies\/[^/]+\/webhook-endpoints/, call.url);
+			assert.doesNotMatch(call.url, /webhook_endpoints/, call.url);
+		}
 	});
 });
 

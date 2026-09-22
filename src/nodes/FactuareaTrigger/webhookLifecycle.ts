@@ -23,8 +23,9 @@
  * reason is a property of the API rather than a preference:
  *
  *   **The plaintext secret is returned exactly once, by the creation call.**
- *   `GET /v1/webhook_endpoints/{id}` returns eighteen keys and `secret` is not
- *   among them, and there is no other route that hands it back.
+ *   `GET /v1/companies/{company}/webhook-endpoints/{webhook_endpoint}` returns
+ *   eighteen keys and `secret` is not among them, and there is no other route
+ *   that hands it back.
  *
  * A trigger holding a destination it did not create therefore has no secret to
  * verify with. Every delivery would arrive correctly signed, fail verification,
@@ -42,13 +43,30 @@
  * NODE created still exist". A destination created by another workflow, by the
  * dashboard or by the CLI is invisible to it on purpose.
  *
- * ## Where the events, the URL and the credential come from
+ * ## Where the events, the URL, the company and the credential come from
  *
  * The receiving address is n8n's (`getNodeWebhookUrl`) — it is the only party
  * that knows the public address this instance answers on. The event list is the
  * `events` parameter of `src/nodes/FactuareaTrigger/properties.ts`. The API key
  * and base URL are the `factuareaApi` credential of
  * `src/credentials/FactuareaApi.credentials.ts`.
+ *
+ * ## THE COMPANY IS READ, NEVER INFERRED
+ *
+ * Every webhook route of the public API now carries the company in its path,
+ * and this file is where the value that fills it is read: the `companyId`
+ * parameter of the node first, and the `companyId` field of the credential when
+ * that one is empty. Both are typed by the integrator.
+ *
+ * What is prohibited is the third source, the one that used to be free: letting
+ * the API resolve the company from whoever owns the key. It cannot happen by
+ * accident any more — a path built without the segment reaches a route that
+ * does not exist — but it can happen by DESIGN, by quietly picking the first
+ * company a key can see. This file does not: with neither value filled, all
+ * three lifecycle methods refuse with `ERROR_COMPANY_NOT_SELECTED` and name the
+ * two fields. A trigger silently attached to the wrong company would register a
+ * destination that never fires, and the events it waited for would be recorded
+ * against a company nobody chose.
  */
 
 import type {
@@ -64,9 +82,15 @@ import type {
 	FactuareaHttpRequestOptions,
 	FactuareaHttpRequester,
 } from '../../client/types';
-import { STATIC_DATA_ENDPOINT_ID, STATIC_DATA_SECRET } from '../../client/types';
+import {
+	CREDENTIAL_FIELD_COMPANY_ID,
+	PARAMETER_COMPANY_ID,
+	STATIC_DATA_ENDPOINT_ID,
+	STATIC_DATA_SECRET,
+} from '../../client/types';
 import { DEFAULT_API_BASE_URL } from '../../contract';
 import {
+	ERROR_COMPANY_NOT_SELECTED,
 	ERROR_ENDPOINT_NOT_ACTIVE,
 	ERROR_ENDPOINT_URL_MISMATCH,
 	ERROR_ENDPOINT_URL_NOT_ACCEPTED,
@@ -119,11 +143,25 @@ const STATUS_ACTIVE = 'active';
 interface FactuareaCredential {
 	apiKey?: unknown;
 	baseUrl?: unknown;
+	companyId?: unknown;
 }
 
 /** The value as a non-empty string, or `null`. */
 function asText(value: unknown): string | null {
 	return typeof value === 'string' && value !== '' ? value : null;
+}
+
+/**
+ * The value as a TRIMMED non-empty string, or `null`.
+ *
+ * Used for the company, and trimmed for a reason the other reads do not have: a
+ * uuid is copied out of the Factuarea interface and pasted into a text field,
+ * and a pasted value carries a trailing space often enough that the untrimmed
+ * form would compose a path with `%20` in it. The 404 that came back would name
+ * a company that looks exactly right on screen.
+ */
+function asIdentifier(value: unknown): string | null {
+	return typeof value === 'string' && value.trim() !== '' ? value.trim() : null;
 }
 
 /** The parameter value as a list of event names, ignoring anything else. */
@@ -161,22 +199,52 @@ function requesterFor(context: IHookFunctions): FactuareaHttpRequester {
 		});
 }
 
+/** What one lifecycle call needs: a client, and the company it addresses. */
+interface ApiSession {
+	readonly client: FactuareaApiClient;
+	/** Fills the `{company}` segment of every webhook-endpoint route. */
+	readonly companyId: string;
+}
+
 /**
- * Builds the API client for this invocation from the node's credential.
+ * Builds the API client for this invocation and resolves the company it works
+ * on, from the node's parameter first and from the credential second.
  *
  * The base URL falls back to the production default when the credential carries
  * a blank one. The credential declares that default and marks the field
  * required, so a blank value means someone cleared it — and a request composed
  * against an empty base would fail as an unreachable host, which reads as
  * "Factuarea is down" instead of "this credential has no address in it".
+ *
+ * THE COMPANY HAS NO SUCH FALLBACK. Two values are consulted and both are typed
+ * by the integrator: the node parameter, which wins because it is the one
+ * visible next to the activation switch, and the credential field, which exists
+ * so an account with a single company fills it once. With neither of them
+ * filled this throws, and that is the whole point of reading them here rather
+ * than in each method: there is no third source to fall through to. Picking the
+ * first company the key can see would need one extra request on the account
+ * axis and would silently attach the trigger to a company nobody chose.
+ *
+ * The resolution happens BEFORE any request goes out, so a missing company
+ * costs no round trip and produces a message that names the field to fill.
  */
-async function clientFor(context: IHookFunctions): Promise<FactuareaApiClient> {
+async function sessionFor(context: IHookFunctions): Promise<ApiSession> {
 	const credential = await context.getCredentials<FactuareaCredential>(CREDENTIAL_NAME);
 
-	return createFactuareaApiClient(requesterFor(context), {
+	const companyId =
+		asIdentifier(context.getNodeParameter(PARAMETER_COMPANY_ID, '')) ??
+		asIdentifier(credential[CREDENTIAL_FIELD_COMPANY_ID]);
+
+	if (companyId === null) {
+		throw new Error(ERROR_COMPANY_NOT_SELECTED);
+	}
+
+	const client = createFactuareaApiClient(requesterFor(context), {
 		apiKey: asText(credential.apiKey) ?? '',
 		baseUrl: asText(credential.baseUrl) ?? DEFAULT_API_BASE_URL,
 	});
+
+	return { client, companyId };
 }
 
 /**
@@ -259,8 +327,8 @@ export async function checkWebhookExists(this: IHookFunctions): Promise<boolean>
 		return false;
 	}
 
-	const client = await clientFor(this);
-	const endpoint = await client.getWebhookEndpoint(endpointId);
+	const { client, companyId } = await sessionFor(this);
+	const endpoint = await client.getWebhookEndpoint(companyId, endpointId);
 
 	if (endpoint === null) {
 		return false;
@@ -306,6 +374,12 @@ export async function checkWebhookExists(this: IHookFunctions): Promise<boolean>
  * an API key that is perfectly fine. The field to fix is in the editor, two
  * inches above the activation switch.
  *
+ * The company is resolved last, after the two checks above, because those two
+ * are free and this one reads the credential. It has no fallback beyond the two
+ * typed values — see `sessionFor` — so an activation with no company named
+ * stops here with the frozen message instead of composing a route without the
+ * segment, which Factuarea would answer with a 404 that names nothing.
+ *
  * Both values the creation returns are stored, and the secret is the one that
  * matters: this call is the ONLY place it is ever available. Losing it means
  * losing the ability to verify every delivery this destination will ever send.
@@ -324,9 +398,9 @@ export async function createWebhookEndpoint(this: IHookFunctions): Promise<boole
 	}
 
 	const description = describeWorkflow(this.getWorkflow());
-	const client = await clientFor(this);
+	const { client, companyId } = await sessionFor(this);
 
-	const endpoint = await client.createWebhookEndpoint({
+	const endpoint = await client.createWebhookEndpoint(companyId, {
 		url,
 		enabled_events: events,
 		...(description === undefined ? {} : { description }),
@@ -358,9 +432,16 @@ export async function deleteWebhookEndpoint(this: IHookFunctions): Promise<boole
 	const endpointId = asText(state[STATIC_DATA_ENDPOINT_ID]);
 
 	if (endpointId !== null) {
-		const client = await clientFor(this);
+		// The company is resolved here too, and a missing one THROWS instead of
+		// deleting nothing quietly: the destination exists in Factuarea, and
+		// finishing the deactivation without removing it would leave it
+		// delivering to a workflow that no longer answers, counting against the
+		// account's limit and removable only by hand. Refusing keeps the stored
+		// identifier, so filling the field in and deactivating again finishes the
+		// job.
+		const { client, companyId } = await sessionFor(this);
 
-		await client.deleteWebhookEndpoint(endpointId);
+		await client.deleteWebhookEndpoint(companyId, endpointId);
 	}
 
 	delete state[STATIC_DATA_ENDPOINT_ID];

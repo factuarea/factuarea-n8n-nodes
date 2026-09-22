@@ -146,6 +146,23 @@ export const ERROR_NO_EVENTS_SELECTED =
 	'Select at least one event in the Events field before activating this workflow. Factuarea registers a delivery destination with the events chosen at the moment of activation and refuses one that subscribes to nothing, so a trigger with an empty selection cannot be registered and would never fire.';
 
 /**
+ * No company was named, so no webhook route can be addressed.
+ *
+ * Every webhook-endpoint route of the public API carries the company in its
+ * path (`/v1/companies/{company}/webhook-endpoints`). Before this version the
+ * routes had no such segment and the API resolved the company from the key on
+ * its own; they no longer do, and this node refuses to guess. A request built
+ * without the segment reaches a route that does not exist, and the 404 that
+ * comes back says nothing about the field that is empty.
+ *
+ * The two places a company can be named are both typed by the integrator: the
+ * node's own Company ID field, and the credential's Default Company ID. Neither
+ * is derived from whoever owns the key.
+ */
+export const ERROR_COMPANY_NOT_SELECTED =
+	'Select the company this trigger works with before activating the workflow. Fill in the Company ID field of the node, or the Default Company ID field of the Factuarea API credential, with the company UUID from Factuarea (Settings, Companies). Every webhook route of the public API carries the company in its path, and Factuarea no longer picks one on your behalf, so a trigger without it cannot register a destination.';
+
+/**
  * Every message in the catalogue, keyed by a stable identifier.
  *
  * Enumerated here so tests and gates can walk the catalogue instead of
@@ -162,6 +179,7 @@ export const NODE_ERRORS = {
 	endpointNotActive: ERROR_ENDPOINT_NOT_ACTIVE,
 	endpointUrlMismatch: ERROR_ENDPOINT_URL_MISMATCH,
 	noEventsSelected: ERROR_NO_EVENTS_SELECTED,
+	companyNotSelected: ERROR_COMPANY_NOT_SELECTED,
 } as const;
 
 /** Stable identifier of a catalogued error message. */
