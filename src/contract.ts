@@ -161,6 +161,45 @@ export const DELIVERY_HEADER_LOOKUP = {
 } as const;
 
 /**
+ * What an ACCOUNT delivery adds to a company delivery.
+ *
+ * An account endpoint (`POST /v1/accounts/{account}/webhooks`) receives the same
+ * eight top-level keys listed on `FactuareaEventBody`, plus three more, emitted
+ * by `AccountWebhookEnvelopeFactory.php:66-79` in the backend:
+ *
+ *   - `account`               `{ "id": "<account uuid>" }` (`:75`)
+ *   - `account_relationship`  `own` or `managed` (`:76`) — never `all`: `all` is
+ *                             only a filter on the endpoint, not a property of
+ *                             one event
+ *   - `company_id`            uuid of the tax ID the event is about, or `null`
+ *                             (`:77`). It is `null` in the `account.*` events that
+ *                             are not about a tax ID (a member added, ownership
+ *                             transferred) and set in the ones that are; the uuid
+ *                             is only validated when it is not `null` (`:63-65`)
+ *
+ * The same value of `account_relationship` travels in the header
+ * `Factuarea-Account-Relationship` (`own` or `managed`), added by
+ * `DeliverAccountWebhookCommandHandler::headersFor()` at `:413` of
+ * `backend/app/Webhooks/Application/Command/DeliverAccountWebhook/DeliverAccountWebhookCommandHandler.php`,
+ * next to the five headers of `DELIVERY_HEADERS` (`:408-412`).
+ *
+ * Everything else is the company contract and is NOT reimplemented for accounts:
+ * the signature (`Factuarea-Signature`, added by the emitter, same format and same
+ * secret rules as above), the replay tolerance and the deduplication on the event
+ * id are exactly those of a company delivery. One event about a tax ID delivered
+ * to a company endpoint and to an account endpoint carries the SAME event id in
+ * both envelopes, so deduplicating on it is correct in each node separately.
+ *
+ * The typed form is `AccountEnvelopeFields` in `src/client/types.ts`.
+ */
+
+/** Header added by the account emitter: `own` or `managed`. */
+export const ACCOUNT_RELATIONSHIP_HEADER = 'Factuarea-Account-Relationship';
+
+/** Lowercase form of `ACCOUNT_RELATIONSHIP_HEADER`, for normalising runtimes. */
+export const ACCOUNT_RELATIONSHIP_HEADER_LOOKUP = 'factuarea-account-relationship';
+
+/**
  * The body of a delivery, exactly as Factuarea publishes it.
  *
  * These eight keys are the whole top level. The node MUST NOT rename, flatten or

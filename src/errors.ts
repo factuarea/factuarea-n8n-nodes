@@ -163,6 +163,70 @@ export const ERROR_COMPANY_NOT_SELECTED =
 	'Select the company this trigger works with before activating the workflow. Fill in the Company ID field of the node, or the Default Company ID field of the Factuarea API credential, with the company UUID from Factuarea (Settings, Companies). Every webhook route of the public API carries the company in its path, and Factuarea no longer picks one on your behalf, so a trigger without it cannot register a destination.';
 
 /**
+ * Account mode: no account was named, so no account webhook route can be addressed.
+ *
+ * Every account webhook route carries the account in its path
+ * (`/v1/accounts/{account}/webhooks`). The two places an account can be named
+ * are both typed by the integrator: the node's own Account ID field and the
+ * credential's Default Account ID field. Neither is derived from whoever owns
+ * the key, because the key does not say which account a workflow should watch.
+ */
+export const ERROR_ACCOUNT_NOT_SELECTED =
+	'Select the account this trigger listens to before activating the workflow. Fill in the Account ID field of the node, or the Default Account ID field of the Factuarea API credential, with the account UUID from Factuarea (call GET /v1/me with your API key and read data.account.id; the cURL example in Settings, Developers also shows the UUID of the active account). Every account webhook route of the public API carries the account in its path, and Factuarea does not pick one from the API key, so a trigger without it cannot register an endpoint.';
+
+/**
+ * An account route answered 404 `account_not_found`: the Account ID is not the
+ * account of this API key (or does not exist).
+ *
+ * Told apart from a missing endpoint by the error `code`, because the remedy is
+ * different: the endpoint is fine, the account in the path is wrong.
+ */
+export const ERROR_ACCOUNT_NOT_FOUND =
+	'Factuarea says the Account ID of this trigger is not the account of this API key, or that account does not exist. Check the Account ID field of the node, or the Default Account ID field of the Factuarea API credential. The UUID of the account of your key is returned by GET /v1/me in data.account.id.';
+
+/**
+ * A test key tried to write an account endpoint.
+ *
+ * The node refuses it BEFORE calling when the key starts with `fact_test_`, and
+ * also translates the REST answers a test key meets (403
+ * `module_not_available_in_sandbox`) and the MCP code `live_credential_required`
+ * (`AccountCapabilityCredentialGuard::ensureWrite`), in case the backend emits
+ * it. A 403 `insufficient_scope` stays the missing-scope message.
+ */
+export const ERROR_LIVE_CREDENTIAL_REQUIRED =
+	'Factuarea refused to register an account webhook because the API key in this credential is a test key. Account webhooks can only be created and removed with a live key. Create a live API key in Factuarea (Settings, Developers, API keys), update the credential with it, then activate this workflow again.';
+
+/**
+ * The key's issuer cannot act on the account (403 `forbidden_action`).
+ *
+ * Account endpoints are reserved to owners and admins whose access covers every
+ * tax ID of the account, and the check is repeated on the key's issuer.
+ */
+export const ERROR_ACCOUNT_CAPABILITY_REQUIRED =
+	'Factuarea refused this account webhook because the user who issued the API key cannot manage the whole account. Account webhooks need a key issued by an owner or an admin with access to all tax IDs of the account. Create a new API key as such a user in Factuarea (Settings, Developers, API keys), update the credential with it, then activate this workflow again.';
+
+/**
+ * The account is at its account-endpoint limit (422 `account_webhook_endpoint_limit_reached`).
+ */
+export const ERROR_ACCOUNT_ENDPOINT_LIMIT_REACHED =
+	'Your Factuarea account has reached its limit of account webhook endpoints, so this trigger could not register one. Delete an account webhook endpoint you no longer use in Factuarea (Settings, Developers, Webhooks) and activate this workflow again.';
+
+/**
+ * The plan does not include account webhooks (402 `addon_required`).
+ */
+export const ERROR_ACCOUNT_WEBHOOKS_ADDON_REQUIRED =
+	'Your current Factuarea plan does not include account webhooks, so this trigger could not register an endpoint. Upgrade the plan of the paying account in Factuarea (Settings, Billing), or switch this trigger back to listening to a single company, then activate this workflow again.';
+
+/**
+ * The endpoint was switched off because its creator lost the capability
+ * (`status: disabled`, `disabled_reason: creator_lost_capability`).
+ *
+ * Not an HTTP rejection: the endpoint still reads back, and receives nothing.
+ */
+export const ERROR_ACCOUNT_ENDPOINT_CREATOR_LOST_CAPABILITY =
+	'The account webhook endpoint this trigger registered has been disabled by Factuarea because the user who created its API key is no longer an owner or an admin with access to all tax IDs. Factuarea has stopped delivering events to it. Update the credential with a key issued by such a user, then deactivate and activate this workflow to register a fresh endpoint.';
+
+/**
  * Every message in the catalogue, keyed by a stable identifier.
  *
  * Enumerated here so tests and gates can walk the catalogue instead of
@@ -180,6 +244,13 @@ export const NODE_ERRORS = {
 	endpointUrlMismatch: ERROR_ENDPOINT_URL_MISMATCH,
 	noEventsSelected: ERROR_NO_EVENTS_SELECTED,
 	companyNotSelected: ERROR_COMPANY_NOT_SELECTED,
+	accountNotSelected: ERROR_ACCOUNT_NOT_SELECTED,
+	accountNotFound: ERROR_ACCOUNT_NOT_FOUND,
+	liveCredentialRequired: ERROR_LIVE_CREDENTIAL_REQUIRED,
+	accountCapabilityRequired: ERROR_ACCOUNT_CAPABILITY_REQUIRED,
+	accountEndpointLimitReached: ERROR_ACCOUNT_ENDPOINT_LIMIT_REACHED,
+	accountWebhooksAddonRequired: ERROR_ACCOUNT_WEBHOOKS_ADDON_REQUIRED,
+	accountEndpointCreatorLostCapability: ERROR_ACCOUNT_ENDPOINT_CREATOR_LOST_CAPABILITY,
 } as const;
 
 /** Stable identifier of a catalogued error message. */

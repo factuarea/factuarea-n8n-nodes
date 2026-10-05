@@ -200,6 +200,127 @@ export const PARAMETER_COMPANY_ID = 'companyId';
  */
 export const CREDENTIAL_FIELD_COMPANY_ID = 'companyId';
 
+/*
+ * ===========================================================================
+ * ACCOUNT MODE — frozen contracts (change `account-tenancy-sibling-repos`, D9).
+ *
+ * The trigger gains a second mode of the SAME node: it can listen to the events
+ * of a whole account instead of one company. The package still declares one
+ * node and one credential, so the mode is a parameter, and `company` stays the
+ * default so a workflow saved before this existed behaves exactly as it did.
+ *
+ * Field names below are the ones of the frozen OpenAPI document (`AccountWebhook`,
+ * `AccountWebhookWithSecret`, `CreateAccountWebhookV1Request`) and of the account
+ * envelope emitted by `AccountWebhookEnvelopeFactory.php:66-79`.
+ * ===========================================================================
+ */
+
+/** Name of the node parameter that selects the mode. */
+export const PARAMETER_LISTEN_ON = 'listenOn';
+
+/** What the trigger listens to: one company, or a whole account. */
+export type ListenOn = 'company' | 'account';
+
+/** The mode of a workflow that has no `listenOn` parameter saved. */
+export const LISTEN_ON_DEFAULT: ListenOn = 'company';
+
+/** Name of the node parameter holding the account uuid. */
+export const PARAMETER_ACCOUNT_ID = 'accountId';
+
+/**
+ * Name of the credential field holding the fallback account uuid.
+ *
+ * Typed by the integrator, never derived from whoever owns the key.
+ */
+export const CREDENTIAL_FIELD_ACCOUNT_ID = 'accountId';
+
+/** Name of the node parameter holding the relationship filter. */
+export const PARAMETER_ACCOUNT_RELATIONSHIP = 'accountRelationship';
+
+/**
+ * Which tax ids an account endpoint covers: `own` (the account's own), `managed`
+ * (the accounts it manages) or `all`. An EVENT envelope only ever carries `own`
+ * or `managed`, never `all`.
+ */
+export type AccountRelationshipFilter = 'own' | 'managed' | 'all';
+
+/** Name of the node parameter that narrows account mode to one company. */
+export const PARAMETER_COMPANY_FILTER = 'companyFilter';
+
+/** Static-data key: the mode the endpoint was created under. */
+export const STATIC_DATA_LISTEN_ON = 'webhookListenOn';
+
+/** Static-data key: the account the endpoint was created under. */
+export const STATIC_DATA_ACCOUNT_ID = 'webhookAccountId';
+
+/**
+ * Static-data key: the company a COMPANY endpoint was created under.
+ *
+ * n8n discards the parameters that a `displayOptions` rule hides, so a workflow
+ * switched from Company to Account mode loses its `companyId` parameter. The
+ * check and the deletion prefer this stored value, falling back to the node and
+ * the credential only for endpoints saved before the key existed.
+ */
+export const STATIC_DATA_COMPANY_ID = 'webhookCompanyId';
+
+/**
+ * An account webhook endpoint as the v1 API returns it on read
+ * (`AccountWebhook`; every key is always present).
+ *
+ * `secret` is NEVER among them: it is returned once, by the creation call.
+ */
+export interface AccountWebhookEndpointV1 {
+	/** UUID v7; the `{webhook}` segment of the routes. */
+	id: string;
+	object: 'account_webhook';
+	environment: 'live' | 'test';
+	url: string;
+	enabled_events: string[];
+	account_relationship: AccountRelationshipFilter;
+	status: 'active' | 'disabled';
+	/** `null` while active; the only value today is `creator_lost_capability`. */
+	disabled_reason: 'creator_lost_capability' | null;
+	/** `YYYY-MM-DD`, or `null`. */
+	api_version: string | null;
+	description: string | null;
+	created_at: string;
+	updated_at: string;
+}
+
+/**
+ * The creation response: the same keys plus the plaintext secret.
+ *
+ * `secret` is `null` only on an idempotent replay, because the secret is never
+ * stored. Whatever reads this MUST persist `secret` at once.
+ */
+export interface AccountWebhookEndpointWithSecretV1 extends AccountWebhookEndpointV1 {
+	secret: string | null;
+}
+
+/**
+ * Body of `POST /v1/accounts/{account}/webhooks`, restricted to what this node
+ * sends. The account is a segment of the path, not a field of the body.
+ */
+export interface CreateAccountWebhookEndpointBody {
+	/** Must be `https://`. */
+	url: string;
+	/** Company events that are `available` plus the `account.*` events. */
+	enabled_events: string[];
+	account_relationship: AccountRelationshipFilter;
+	description?: string;
+}
+
+/**
+ * The three keys an account delivery adds to the envelope of a company delivery.
+ *
+ * `company_id` is `null` in an `account.*` event that is not about a tax id.
+ */
+export interface AccountEnvelopeFields {
+	account: { id: string };
+	account_relationship: 'own' | 'managed';
+	company_id: string | null;
+}
+
 /**
  * A webhook destination as the v1 API returns it on read.
  *
@@ -375,4 +496,30 @@ export interface FactuareaApiClient {
 	 * falling back to a hand-written list.
 	 */
 	listEventCatalog(): Promise<EventCatalogEntryV1[]>;
+
+	/**
+	 * `POST /v1/accounts/{account}/webhooks` — scope `webhooks:write`, live
+	 * credential only. `accountId` fills `{account}`.
+	 *
+	 * Resolves with the endpoint INCLUDING its plaintext secret, which the caller
+	 * must persist at once.
+	 */
+	createAccountWebhookEndpoint(
+		accountId: string,
+		body: CreateAccountWebhookEndpointBody,
+	): Promise<AccountWebhookEndpointWithSecretV1>;
+
+	/**
+	 * `GET /v1/accounts/{account}/webhooks/{webhook}` — scope `webhooks:read`.
+	 *
+	 * Rejects with `ERROR_ENDPOINT_GONE` on HTTP 404 (the signature has no `null`
+	 * branch); the caller tells that message apart from other failures.
+	 */
+	getAccountWebhookEndpoint(accountId: string, endpointId: string): Promise<AccountWebhookEndpointV1>;
+
+	/**
+	 * `DELETE /v1/accounts/{account}/webhooks/{webhook}` — scope
+	 * `webhooks:delete`. Resolves normally when the endpoint was already gone.
+	 */
+	deleteAccountWebhookEndpoint(accountId: string, endpointId: string): Promise<void>;
 }

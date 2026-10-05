@@ -1,10 +1,23 @@
 import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
-import { describe, it } from 'node:test';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { describe, it, mock } from 'node:test';
 
-import type { IDataObject, INodeExecutionData, IWebhookFunctions } from 'n8n-workflow';
+import type {
+	IDataObject,
+	IHookFunctions,
+	INodeExecutionData,
+	IWebhookFunctions,
+} from 'n8n-workflow';
 
-import { LOAD_OPTIONS_METHOD_EVENT_TYPES, STATIC_DATA_SECRET } from '../src/client/types';
+import {
+	LOAD_OPTIONS_METHOD_EVENT_TYPES,
+	PARAMETER_COMPANY_FILTER,
+	PARAMETER_LISTEN_ON,
+	STATIC_DATA_SECRET,
+} from '../src/client/types';
+import type { FactuareaHttpRequestOptions } from '../src/client/types';
 import { DEFAULT_TOLERANCE_SECONDS, DELIVERY_HEADER_LOOKUP } from '../src/contract';
 import {
 	ERROR_RAW_BODY_UNAVAILABLE,
@@ -92,6 +105,10 @@ interface DoubleOptions {
 	readonly secret?: string;
 	readonly toleranceSeconds?: number;
 	readonly deduplicate?: boolean;
+	/** The `listenOn` parameter; absent models a workflow saved before account mode. */
+	readonly listenOn?: string;
+	/** The optional company filter of account mode; absent models it left empty. */
+	readonly companyFilter?: string;
 }
 
 interface Double {
@@ -167,6 +184,14 @@ function webhookDouble(options: DoubleOptions = {}): Double {
 
 			if (name === 'deduplicate') {
 				return options.deduplicate ?? true;
+			}
+
+			if (name === PARAMETER_LISTEN_ON) {
+				return options.listenOn ?? fallback;
+			}
+
+			if (name === PARAMETER_COMPANY_FILTER) {
+				return options.companyFilter ?? fallback;
 			}
 
 			return fallback;
@@ -559,5 +584,334 @@ describe('FactuareaTrigger — description and wiring', () => {
 		assert.equal(typeof webhookMethods.default.checkExists, 'function');
 		assert.equal(typeof webhookMethods.default.create, 'function');
 		assert.equal(typeof webhookMethods.default.delete, 'function');
+	});
+});
+
+/**
+ * ACCOUNT MODE (change `account-tenancy-sibling-repos`, design D9 and D11).
+ *
+ * The deliveries are the signed account envelopes of
+ * `test/vectors/account-envelope-vectors.json`, generated with the emitter's
+ * signature scheme. Their timestamps are fixed, so each test pins the clock to
+ * the vector's own instant: the tolerance check then runs for real, against a
+ * `Date.now` that agrees with the signature.
+ */
+
+interface AccountVector {
+	name: string;
+	timestamp: number;
+	rawBody: string;
+	header: string;
+	expect: 'accept' | 'reject';
+	companyId: string | null;
+	relationship: 'own' | 'managed';
+}
+
+interface AccountVectorFile {
+	secret: string;
+	accountId: string;
+	companyA: string;
+	companyB: string;
+	vectors: AccountVector[];
+}
+
+/** Read from disk, trying the source and the compiled depth, and failing loudly on a miss. */
+function loadAccountVectors(): AccountVectorFile {
+	const candidates = [
+		join(__dirname, 'vectors', 'account-envelope-vectors.json'),
+		join(__dirname, '..', '..', 'test', 'vectors', 'account-envelope-vectors.json'),
+	];
+	const found = candidates.find((path) => existsSync(path));
+
+	if (found === undefined) {
+		throw new Error(`account envelope vectors not found. Looked in: ${candidates.join(', ')}`);
+	}
+
+	return JSON.parse(readFileSync(found, 'utf8')) as AccountVectorFile;
+}
+
+const ACCOUNT_VECTORS = loadAccountVectors();
+
+function vectorNamed(name: string): AccountVector {
+	const found = ACCOUNT_VECTORS.vectors.find((vector) => vector.name === name);
+
+	assert.ok(found !== undefined, `vector ${name} is missing from the vector file`);
+
+	return found;
+}
+
+/** A double that delivers one vector's exact bytes and header, as the account emitter would. */
+function accountDouble(
+	vector: AccountVector,
+	options: Omit<DoubleOptions, 'rawBody' | 'body' | 'header' | 'secret'> = {},
+): Double {
+	return webhookDouble({
+		listenOn: 'account',
+		...options,
+		rawBody: vector.rawBody,
+		body: JSON.parse(vector.rawBody) as Record<string, unknown>,
+		header: vector.header,
+		secret: ACCOUNT_VECTORS.secret,
+	});
+}
+
+/** Runs `run` with the clock pinned to the instant the vector was signed at. */
+async function atSigningTime<T>(vector: AccountVector, run: () => Promise<T>): Promise<T> {
+	const clock = mock.method(Date, 'now', () => vector.timestamp * 1000);
+
+	try {
+		return await run();
+	} finally {
+		clock.mock.restore();
+	}
+}
+
+/** Asserts the node acknowledged the delivery with 200 and emitted nothing. */
+function assertAcknowledgedWithoutItem(
+	double: Double,
+	result: Awaited<ReturnType<FactuareaTrigger['webhook']>>,
+): void {
+	assert.deepEqual(double.statuses, [200], 'the node should answer success');
+	assert.equal(double.ends.length, 1, 'the response should be closed exactly once');
+	assert.equal(result.noWebhookResponse, true);
+	assert.equal(result.workflowData, undefined, 'no item may reach the workflow');
+}
+
+describe('FactuareaTrigger — account mode, accepted delivery', () => {
+	it('emits one item with the type, the account, the relationship and the company id', async () => {
+		const vector = vectorNamed('valid_account_event');
+		const double = accountDouble(vector, { deliveryId: DELIVERY_ID });
+
+		const result = await atSigningTime(vector, () => deliver(double));
+		const [item] = itemsOf(result);
+
+		assert.ok(item !== undefined);
+		assert.equal(item.json['type'], 'invoice.paid');
+		assert.deepEqual(item.json['account'], { id: ACCOUNT_VECTORS.accountId });
+		assert.equal(item.json['account_relationship'], vector.relationship);
+		assert.equal(item.json['company_id'], ACCOUNT_VECTORS.companyA);
+		assert.equal(item.json['delivery_id'], DELIVERY_ID);
+		assert.deepEqual(double.statuses, [], 'n8n answers; the node writes no status of its own');
+	});
+
+	it('accepts a rotation delivery whose second signature is the one the node holds', async () => {
+		const vector = vectorNamed('rotation_second_signature_matches');
+		const double = accountDouble(vector);
+
+		const result = await atSigningTime(vector, () => deliver(double));
+
+		assert.equal(itemsOf(result).length, 1);
+	});
+
+	it('emits an account.member_added event that has no company id', async () => {
+		const vector = vectorNamed('member_added_without_company_id');
+		const double = accountDouble(vector);
+
+		const result = await atSigningTime(vector, () => deliver(double));
+		const [item] = itemsOf(result);
+
+		assert.ok(item !== undefined);
+		assert.equal(item.json['type'], 'account.member_added');
+		assert.equal(item.json['company_id'], null);
+	});
+});
+
+describe('FactuareaTrigger — account mode, refused delivery', () => {
+	it('answers 401 and emits nothing when the delivery is signed with another secret', async () => {
+		const vector = vectorNamed('signed_with_other_secret');
+		const double = accountDouble(vector);
+
+		const result = await atSigningTime(vector, () => deliver(double));
+
+		assertRefusedWith(double, result, 401);
+	});
+
+	it('does not let the company filter bypass the signature check', async () => {
+		const vector = vectorNamed('signed_with_other_secret');
+		const double = accountDouble(vector, { companyFilter: ACCOUNT_VECTORS.companyB });
+
+		const result = await atSigningTime(vector, () => deliver(double));
+
+		// Refused as forged (401), not acknowledged as filtered (200): the filter
+		// reads a body that is only trusted once the signature has passed.
+		assertRefusedWith(double, result, 401);
+	});
+});
+
+describe('FactuareaTrigger — account mode, company filter', () => {
+	it('acknowledges with success and emits nothing for another company', async () => {
+		const vector = vectorNamed('nif_event_with_company_id');
+		const double = accountDouble(vector, { companyFilter: ACCOUNT_VECTORS.companyA });
+
+		const result = await atSigningTime(vector, () => deliver(double));
+
+		assertAcknowledgedWithoutItem(double, result);
+	});
+
+	it('emits the event of the filtered company', async () => {
+		const vector = vectorNamed('nif_event_with_company_id');
+		const double = accountDouble(vector, { companyFilter: ACCOUNT_VECTORS.companyB });
+
+		const result = await atSigningTime(vector, () => deliver(double));
+		const [item] = itemsOf(result);
+
+		assert.ok(item !== undefined);
+		assert.equal(item.json['type'], 'account.nif_added');
+		assert.equal(item.json['company_id'], ACCOUNT_VECTORS.companyB);
+		assert.equal(item.json['account_relationship'], 'own');
+	});
+
+	it('emits an event with no company id even when the filter is set', async () => {
+		const vector = vectorNamed('member_added_without_company_id');
+		const double = accountDouble(vector, { companyFilter: ACCOUNT_VECTORS.companyA });
+
+		const result = await atSigningTime(vector, () => deliver(double));
+
+		assert.equal(itemsOf(result).length, 1);
+	});
+
+	it('compares the filter without case and without a pasted space', async () => {
+		const vector = vectorNamed('nif_event_with_company_id');
+		const double = accountDouble(vector, {
+			companyFilter: ` ${ACCOUNT_VECTORS.companyB.toUpperCase()} `,
+		});
+
+		const result = await atSigningTime(vector, () => deliver(double));
+
+		assert.equal(itemsOf(result).length, 1);
+	});
+
+	it('emits everything when the filter is empty', async () => {
+		const vector = vectorNamed('nif_event_with_company_id');
+		const double = accountDouble(vector, { companyFilter: '' });
+
+		const result = await atSigningTime(vector, () => deliver(double));
+
+		assert.equal(itemsOf(result).length, 1);
+	});
+
+	it('does not remember the id of an event the filter dropped', async () => {
+		const vector = vectorNamed('nif_event_with_company_id');
+		const double = accountDouble(vector, { companyFilter: ACCOUNT_VECTORS.companyA });
+
+		await atSigningTime(vector, () => deliver(double));
+
+		// Same state, filter now matching: the event must still be processed, which
+		// proves the first (ignored) arrival was not recorded as handled.
+		const matching = accountDouble(vector, { companyFilter: ACCOUNT_VECTORS.companyB });
+
+		Object.assign(matching.state, double.state);
+
+		const result = await atSigningTime(vector, () => deliver(matching));
+
+		assert.equal(itemsOf(result).length, 1);
+	});
+
+	it('ignores the filter in company mode', async () => {
+		const vector = vectorNamed('nif_event_with_company_id');
+		const double = accountDouble(vector, {
+			listenOn: 'company',
+			companyFilter: ACCOUNT_VECTORS.companyA,
+		});
+
+		const result = await atSigningTime(vector, () => deliver(double));
+
+		assert.equal(itemsOf(result).length, 1);
+	});
+});
+
+describe('FactuareaTrigger — account mode, repeated delivery', () => {
+	it('answers 200 and emits nothing the second time the same event id arrives', async () => {
+		const vector = vectorNamed('valid_account_event');
+		const double = accountDouble(vector);
+
+		const first = await atSigningTime(vector, () => deliver(double));
+
+		assert.equal(itemsOf(first).length, 1);
+
+		const second = await atSigningTime(vector, () => deliver(double));
+
+		assertAcknowledgedWithoutItem(double, second);
+	});
+
+	it('emits the event again when deduplication is turned off', async () => {
+		const vector = vectorNamed('valid_account_event');
+		const double = accountDouble(vector, { deduplicate: false });
+
+		await atSigningTime(vector, () => deliver(double));
+
+		const second = await atSigningTime(vector, () => deliver(double));
+
+		assert.equal(itemsOf(second).length, 1);
+	});
+});
+
+describe('FactuareaTrigger — account mode, description and wiring', () => {
+	it('is still one node, and its description names both modes', () => {
+		const { description } = new FactuareaTrigger();
+
+		assert.equal(description.name, 'factuareaTrigger');
+		assert.match(description.description, /company/);
+		assert.match(description.description, /account/);
+	});
+
+	it('registers by company when the workflow has no listenOn saved', async () => {
+		// A workflow saved before account mode has no `listenOn`, and n8n resolves
+		// a missing value to the property default. Both ends are pinned: the
+		// declared default is `company`, and the lifecycle registers on the
+		// company route when it reads that default.
+		const modeProperty = factuareaTriggerProperties.find((entry) => entry.name === 'listenOn');
+
+		assert.ok(modeProperty !== undefined);
+		assert.equal(modeProperty.default, 'company');
+
+		const calls: FactuareaHttpRequestOptions[] = [];
+		const company = '019251c0-0000-7000-8000-00000000fa01';
+		const hook = {
+			async getCredentials(): Promise<unknown> {
+				return { apiKey: 'fk_live_notarealkey', baseUrl: 'https://api.factuarea.test/v1' };
+			},
+			getNodeWebhookUrl(): string {
+				return 'https://n8n.example.com/webhook/019251c0';
+			},
+			getNodeParameter(name: string, fallback?: unknown): unknown {
+				if (name === 'companyId') {
+					return company;
+				}
+
+				if (name === 'events') {
+					return ['invoice.paid'];
+				}
+
+				return fallback;
+			},
+			getWorkflowStaticData(): Record<string, unknown> {
+				return {};
+			},
+			getWorkflow(): { active: boolean } {
+				return { active: true };
+			},
+			helpers: {
+				async httpRequest(request: FactuareaHttpRequestOptions): Promise<unknown> {
+					calls.push(request);
+
+					return {
+						statusCode: 201,
+						body: { data: { id: '019251c0-0000-7000-8000-00000000abcd', secret: 'whsec_x' } },
+						headers: {},
+					};
+				},
+			},
+		} as unknown as IHookFunctions;
+
+		const { webhookMethods } = new FactuareaTrigger();
+
+		await webhookMethods.default.create.call(hook);
+
+		assert.equal(calls.length, 1);
+		assert.equal(
+			calls[0]?.url,
+			`https://api.factuarea.test/v1/companies/${company}/webhook-endpoints`,
+		);
 	});
 });

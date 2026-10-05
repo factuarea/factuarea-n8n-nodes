@@ -3,6 +3,7 @@ import { describe, it } from 'node:test';
 
 import type { INodeProperties } from 'n8n-workflow';
 
+import { CREDENTIAL_FIELD_ACCOUNT_ID } from '../src/client/types';
 import { DEFAULT_API_BASE_URL } from '../src/contract';
 import { FactuareaApi } from '../src/credentials/FactuareaApi.credentials';
 
@@ -78,6 +79,49 @@ describe('FactuareaApi credential', () => {
 		assert.equal(company.default, '');
 		assert.notEqual(company.required, true);
 		assert.notEqual(company.typeOptions?.password, true);
+	});
+
+	it('carries an optional Default Account ID, empty by default, typed rather than inferred', () => {
+		const credential = new FactuareaApi();
+
+		const account = propertyNamed(credential.properties, CREDENTIAL_FIELD_ACCOUNT_ID);
+
+		// Backs the Account ID field of the node in account mode, exactly as the
+		// company field backs the Company ID one. The label is the one the
+		// catalogued "account not selected" message tells the user to fill in.
+		assert.equal(account.displayName, 'Default Account ID');
+		assert.equal(account.type, 'string');
+		assert.equal(account.default, '');
+		assert.notEqual(account.required, true);
+		assert.notEqual(account.typeOptions?.password, true);
+
+		// It is typed by the integrator and used only by account mode; the
+		// description has to say both, because an empty field is legal.
+		const description = account.description ?? '';
+		assert.match(description, /never inferred/i);
+		assert.match(description, /account mode/i);
+	});
+
+	it('keeps the company field and the account field apart', () => {
+		const credential = new FactuareaApi();
+
+		const names = credential.properties.map((declared) => declared.name);
+		assert.deepEqual(names, ['apiKey', 'baseUrl', 'companyId', CREDENTIAL_FIELD_ACCOUNT_ID]);
+	});
+
+	it('keeps the base URL on the version segment, with neither an account nor a company', () => {
+		const credential = new FactuareaApi();
+
+		const baseUrl = propertyNamed(credential.properties, 'baseUrl');
+		const declared = String(baseUrl.default);
+
+		// Account webhook routes carry `accounts/{account}` in their path. Pasting
+		// it into the base URL would break the catalogue and the credential test,
+		// which hang from the root with no prefix at all.
+		assert.equal(declared.endsWith('/v1'), true, declared);
+		assert.doesNotMatch(declared, /accounts/);
+		assert.doesNotMatch(declared, /\{account\}/);
+		assert.doesNotMatch(String(credential.test.request.url), /accounts/);
 	});
 
 	it('authenticates every request with a bearer header built from the key', () => {

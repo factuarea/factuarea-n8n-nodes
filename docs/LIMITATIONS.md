@@ -6,7 +6,8 @@ names the file that decides the behaviour, so the claim can be re-checked rather
 than trusted.
 
 There are four limitations that will change how you build. Read the first one
-before you install: it decides whether the node can work for you at all.
+before you install: it decides whether the node can work for you at all. Account
+mode adds five more, in the section after number 4.
 
 ---
 
@@ -229,6 +230,112 @@ holiday for a machine under a desk — **deactivate the workflow first**. A
 deactivated workflow has no destination in Factuarea, so nothing fails, nothing
 counts towards the threshold, and the events are still recorded in Factuarea for
 you to replay by hand.
+
+---
+
+## Account mode: five more limitations
+
+These apply only when **Listen On** is **Account**. Company mode is not affected
+by any of them. The codes below are the `error.code` of the Factuarea API, as
+catalogued by the platform; the node turns each into its own message, so you read
+the cause in n8n instead of a generic failure.
+
+### A1. Account mode works only with a live key (`fact_live_`)
+
+**An account webhook is created and removed only with a production key.** A test
+key, `fact_test_`, cannot write one, and in Account mode the node refuses it
+**before sending any request**, with the message that asks for a live key. The platform refuses it with
+**403 `live_credential_required`** where the credential guard answers
+(`AccountCapabilityCredentialGuard::ensureWrite`), and the node has a catalogued
+message for that code asking for a live key.
+
+**One measured detail you should know.** On the REST route this node uses, the
+guard is not the first thing a test key meets. The API checks the permission
+first, and a test key is not issued the `webhooks:write` permission at all: it
+gets a **403 `insufficient_scope`**, or **403 `module_not_available_in_sandbox`**
+if it somehow carries the permission. The controller that serves
+`POST /v1/accounts/{account}/webhooks` documents exactly that order
+(`CreateAccountWebhookController.php:30-36` in the Factuarea backend), and
+`live_credential_required` is the code of the same guard when it is reached
+through the MCP channel. The node does not leave you to decode that: a key that
+starts with `fact_test_` is refused up front, and a `module_not_available_in_sandbox`
+(or `live_credential_required`) answer from the API is turned into the same
+live-key message. A plain **403 `insufficient_scope`** from a live key stays the
+missing-scope message, because there the cause really is a missing permission.
+Whichever code you see, the cause and the remedy are the same: put a live key in
+the credential.
+
+Related and different, **403 `forbidden_action`**: the key is live, but the user
+who issued it is no longer an owner or an admin of the account, or the key does
+not cover all of the account's tax ids. The remedy is a new key issued by such a
+user. If that happens *after* the endpoint exists, Factuarea does not reject
+anything: it **disables the endpoint** (`status: disabled`,
+`disabled_reason: creator_lost_capability`) and stops delivering. The node reports
+that state when the workflow is activated again.
+
+### A2. Test endpoints can be created only from the dashboard
+
+An account endpoint of the test environment can be created only from the
+Factuarea dashboard, whose environment toggle decides where it is born. This node
+cannot create one, for the reason in A1: the creation is a write, and writes need
+a live key. So a test workflow cannot be wired up by activating a trigger. To
+exercise a receiver in a sandbox, create the destination in the dashboard and use
+the test delivery, as described in *Sandbox keys record events but do not deliver
+them* below.
+
+### A3. OAuth is excluded
+
+**There is no OAuth path for account mode.** The credential of this package is an
+API key sent as a Bearer token, and the account webhook operations are available
+only with an API key: an OAuth connection is not an account credential, because it
+has no issuing user whose role can be checked and no key scope over the tax ids of
+the account. Where Factuarea serves these operations to OAuth connections, the MCP
+channel, it refuses them with **403 `forbidden_action`** (the same code as the
+issuer case in A1) before checking anything else
+(`AccountCapabilityForbiddenException::oauthChannel()`). For this node that is a
+statement about the design, not a failure you can hit: there is no OAuth
+credential type to select.
+
+### A4. The `account.*` list is fixed, with no catalogue route, and a test guards it
+
+**The fifteen `account.*` events in the picker are written down in the package,
+not read from Factuarea.** The public `GET /v1/event-catalog` never lists them, by
+design, and no other route does. So the picker of Account mode offers the live
+public catalogue plus the list in
+`src/nodes/FactuareaTrigger/accountEventCatalog.ts`, which is the one list of the
+package that is not read live.
+
+Two consequences:
+
+- When Factuarea adds an `account.*` event, it does not appear in the picker until
+  a new version of this package lists it.
+- A selection that includes a name Factuarea does not know is refused at
+  activation with **422 `invalid_param_value`**, a status the node cannot tell
+  apart from other invalid values.
+
+The risk is bounded by a test. `test/accountEventCatalog.test.ts` compares the
+list with `test/vectors/account-event-types.json`, a data file extracted from the
+`AccountEventType` schema of the frozen API document, and fails naming the event
+that is extra or missing. If the contract changes and the vector is regenerated,
+the test shows what to add.
+
+### A5. The number of account endpoints is capped by the plan
+
+**Creating an account endpoint beyond the cap of the payer's plan is refused with
+422 `account_webhook_endpoint_limit_reached`.** Account endpoints are counted
+apart from company endpoints, per account and per environment, and the cap is the
+one of the tier of whoever *pays* for the account, not of the key that creates the
+endpoint (`config/public_api_tiers.php`, `max_account_webhook_endpoints`). When
+this document was written the caps were 0 for free, 1 for starter, 10 for pro and
+50 for scale. Read them as a measurement of that day, not as a promise.
+
+A plan that does not include account webhooks is refused differently:
+**402 `addon_required`** (subcode `account_webhooks_addon_required`).
+
+Each activation of a workflow creates one endpoint, and each deactivation removes
+it, so a workflow normally holds one slot. When the cap is reached, delete an
+account endpoint you no longer use in Factuarea (**Settings > Developers >
+Webhooks**) and activate the workflow again.
 
 ---
 

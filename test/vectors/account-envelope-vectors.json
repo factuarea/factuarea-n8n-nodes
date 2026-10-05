@@ -1,0 +1,74 @@
+{
+	"$meta": {
+		"description": "Signed ACCOUNT webhook envelopes for the trigger tests. Each rawBody is the compact JSON of the envelope emitted by AccountWebhookEnvelopeFactory (id, type, api_version, created, livemode, test, correlation_id, account, account_relationship, company_id, data) and each header is what HmacSignatureGenerator::sign() builds. Secrets are synthetic fixtures. Do not edit by hand: regenerate with the command below.",
+		"emitter_envelope": "Factuarea backend, AccountWebhookEnvelopeFactory (envelope keys and their order)",
+		"emitter_envelope_serialisation": "Factuarea backend, AccountWebhookEnvelopeFactory (json_encode with JSON_UNESCAPED_SLASHES)",
+		"emitter_signature": "Factuarea backend, HmacSignatureGenerator (sign)",
+		"emitter_headers": "Factuarea backend, DeliverAccountWebhookCommandHandler (delivery headers)",
+		"signed_material": "`${timestamp}` + \".\" + rawBody, HMAC-SHA256, lowercase hex",
+		"header_format": "t=<unix>,v1=<hex>[,v1=<hex>]",
+		"generated_with": "node scripts/generate-account-envelope-vectors.mjs",
+		"determinism": "Secrets, ids and timestamps are fixed in the generator, so running it again rewrites the same bytes.",
+		"verification_note": "That verifySignature accepts every vector marked accept, and rejects the others with the stated reason, is checked by the package test suite."
+	},
+	"secret": "whsec_a1c0ffee00000000000000000000aa01",
+	"otherSecret": "whsec_b2d1ffee00000000000000000000bb02",
+	"newSecret": "whsec_c3e2ffee00000000000000000000cc03",
+	"accountId": "019251c0-0000-7000-8000-00000000ac01",
+	"companyA": "019251c0-0000-7000-8000-00000000ca01",
+	"companyB": "019251c0-0000-7000-8000-00000000cb02",
+	"vectors": [
+		{
+			"name": "valid_account_event",
+			"description": "A delivery about a tax id of the account itself (relationship own), signed with the secret the node holds. The verifier must accept it and the item must carry account, relationship and company_id.",
+			"timestamp": 1767225600,
+			"rawBody": "{\"id\":\"0198f3c2-7a41-7c3e-9d2b-5f6a1b8c4e01\",\"type\":\"invoice.paid\",\"api_version\":\"2026-01-01\",\"created\":1767225600,\"livemode\":true,\"test\":false,\"correlation_id\":null,\"account\":{\"id\":\"019251c0-0000-7000-8000-00000000ac01\"},\"account_relationship\":\"own\",\"company_id\":\"019251c0-0000-7000-8000-00000000ca01\",\"data\":{\"invoice\":{\"id\":\"0198f3c2-7a41-7c3e-9d2b-5f6a1b8c4e0f\",\"number\":\"F2026-0001\"}}}",
+			"header": "t=1767225600,v1=343b62fa672b6587e4af1765db57feb92a476d5097bfdb8ff21f98e9e3b2af69",
+			"expect": "accept",
+			"companyId": "019251c0-0000-7000-8000-00000000ca01",
+			"relationship": "own"
+		},
+		{
+			"name": "signed_with_other_secret",
+			"description": "The same kind of delivery signed with a secret the node does not hold. The verifier must reject it with no_match and nothing may be emitted.",
+			"timestamp": 1767225660,
+			"rawBody": "{\"id\":\"0198f3c2-7a41-7c3e-9d2b-5f6a1b8c4e02\",\"type\":\"invoice.created\",\"api_version\":\"2026-01-01\",\"created\":1767225660,\"livemode\":true,\"test\":false,\"correlation_id\":null,\"account\":{\"id\":\"019251c0-0000-7000-8000-00000000ac01\"},\"account_relationship\":\"own\",\"company_id\":\"019251c0-0000-7000-8000-00000000ca01\",\"data\":{\"invoice\":{\"id\":\"0198f3c2-7a41-7c3e-9d2b-5f6a1b8c4e1f\",\"number\":\"F2026-0002\"}}}",
+			"header": "t=1767225660,v1=cd69670ab0224698b7490db2c21f3343cfae511b205249d2d6505d300b820939",
+			"expect": "reject",
+			"expectedReason": "no_match",
+			"companyId": "019251c0-0000-7000-8000-00000000ca01",
+			"relationship": "own"
+		},
+		{
+			"name": "rotation_second_signature_matches",
+			"description": "Rotation grace window: the emitter signs with the new secret and then with the previous one. The node still holds the previous secret, which is the SECOND candidate, so the verifier must keep reading after a first candidate that does not match.",
+			"timestamp": 1767225720,
+			"rawBody": "{\"id\":\"0198f3c2-7a41-7c3e-9d2b-5f6a1b8c4e03\",\"type\":\"invoice.paid\",\"api_version\":\"2026-01-01\",\"created\":1767225720,\"livemode\":true,\"test\":false,\"correlation_id\":null,\"account\":{\"id\":\"019251c0-0000-7000-8000-00000000ac01\"},\"account_relationship\":\"managed\",\"company_id\":\"019251c0-0000-7000-8000-00000000ca01\",\"data\":{\"invoice\":{\"id\":\"0198f3c2-7a41-7c3e-9d2b-5f6a1b8c4e2f\",\"number\":\"F2026-0003\"}}}",
+			"header": "t=1767225720,v1=31413dd62d4b81705ebd810900e06f59613619fbe8913b44d5501faa2c9d12eb,v1=4e86c1f02b1acbd913b63d4680d3875230267444ae0fffde4f681b2a67f43cd6",
+			"expect": "accept",
+			"matchingCandidateIndex": 1,
+			"companyId": "019251c0-0000-7000-8000-00000000ca01",
+			"relationship": "managed"
+		},
+		{
+			"name": "nif_event_with_company_id",
+			"description": "An account.nif_added delivery about ANOTHER tax id of the account (company_id differs from the one in the valid vector). With a company filter set to the first company it must be acknowledged and dropped; with the filter set to this one it must be emitted.",
+			"timestamp": 1767225780,
+			"rawBody": "{\"id\":\"0198f3c2-7a41-7c3e-9d2b-5f6a1b8c4e04\",\"type\":\"account.nif_added\",\"api_version\":\"2026-01-01\",\"created\":1767225780,\"livemode\":true,\"test\":false,\"correlation_id\":null,\"account\":{\"id\":\"019251c0-0000-7000-8000-00000000ac01\"},\"account_relationship\":\"own\",\"company_id\":\"019251c0-0000-7000-8000-00000000cb02\",\"data\":{\"company\":{\"id\":\"019251c0-0000-7000-8000-00000000cb02\"}}}",
+			"header": "t=1767225780,v1=d4b8ec9eb762fe1f45333a9a4fa0f0cb5d9c5bdab32f1254773b1aeff93aa62d",
+			"expect": "accept",
+			"companyId": "019251c0-0000-7000-8000-00000000cb02",
+			"relationship": "own"
+		},
+		{
+			"name": "member_added_without_company_id",
+			"description": "An account.member_added delivery: an event of the account itself, so company_id is null in the envelope. It must always be emitted, whatever the company filter says.",
+			"timestamp": 1767225840,
+			"rawBody": "{\"id\":\"0198f3c2-7a41-7c3e-9d2b-5f6a1b8c4e05\",\"type\":\"account.member_added\",\"api_version\":\"2026-01-01\",\"created\":1767225840,\"livemode\":true,\"test\":false,\"correlation_id\":null,\"account\":{\"id\":\"019251c0-0000-7000-8000-00000000ac01\"},\"account_relationship\":\"own\",\"company_id\":null,\"data\":{\"member\":{\"id\":\"0198f3c2-7a41-7c3e-9d2b-5f6a1b8c4e5f\",\"role\":\"admin\"}}}",
+			"header": "t=1767225840,v1=8d5303319a35a63f8cec5926c33e25c655c9b0fbb73ec6378127613bf6a9583e",
+			"expect": "accept",
+			"companyId": null,
+			"relationship": "own"
+		}
+	]
+}

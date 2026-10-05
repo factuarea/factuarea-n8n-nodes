@@ -8,6 +8,12 @@ The node registers its own webhook destination in your Factuarea account when
 you activate the workflow, verifies the HMAC-SHA256 signature of every delivery
 it receives, and removes the destination again when you deactivate the workflow.
 
+The trigger has two modes. **Company** mode, the default, listens to the events
+of one company. **Account** mode listens to the events of a whole Factuarea
+account: the account's own tax ids, the accounts it manages, and the account's
+own events such as `account.member_added`. See
+[Listening to a whole account](#listening-to-a-whole-account).
+
 This package contains **one trigger node and one credential**. It does not
 create, read or modify anything in Factuarea beyond its own webhook destination.
 To call the Factuarea API from a workflow, use n8n's HTTP Request node against
@@ -41,7 +47,7 @@ Your options:
 There is no setting in this node, and no configuration in Factuarea, that lifts
 this restriction. See [docs/LIMITATIONS.md](docs/LIMITATIONS.md) for the full
 measurement and for the other three limitations you should know about before you
-build on this node.
+build on this node, and for the five that apply only to Account mode.
 
 ---
 
@@ -69,13 +75,14 @@ Restart n8n. **Factuarea Trigger** then appears in the node panel.
 
 ## Creating the credential
 
-The node uses one credential type, **Factuarea API**, with three fields:
+The node uses one credential type, **Factuarea API**, with four fields:
 
 | Field | What it is |
 | --- | --- |
 | **API Key** | An API key from Factuarea (**Settings > Developers > API keys**). Stored encrypted by n8n and masked in the editor. |
 | **Base URL** | Root of the Factuarea public API including the version segment, and nothing after it. Defaults to `https://api.factuarea.com/v1`. Change it only if the key belongs to a different Factuarea environment. **Do not put a company in it**: the event catalogue and the credential test hang from this same root, and a base URL carrying a company breaks both. |
 | **Default Company ID** | Optional. UUID of the Factuarea company this key works with, used by a trigger that leaves its own **Company ID** field empty. Fill it in when the account works with a single company, so it is typed once instead of once per workflow. |
+| **Default Account ID** | Optional. UUID of the Factuarea account this key belongs to, used by a trigger in **Account** mode that leaves its own **Account ID** field empty. You type it: the node never derives it from the key. Company mode ignores it. |
 
 The key needs four scopes, and the trigger fails with a message naming the
 missing permission if any of them is absent:
@@ -86,6 +93,12 @@ missing permission if any of them is absent:
 | `webhooks:write` | Register the webhook destination when the workflow is activated. |
 | `webhooks:read` | Check that the destination it registered still exists. |
 | `webhooks:delete` | Remove the destination when the workflow is deactivated. |
+
+Account mode needs the same four scopes, with two more requirements on the key
+itself: it must be a **live** key (`fact_live_`), and the user who issued it must
+be an owner or an admin of the account with access to all of its tax ids. See
+[Listening to a whole account](#listening-to-a-whole-account) and
+[docs/LIMITATIONS.md](docs/LIMITATIONS.md).
 
 Press **Test** on the credential to check it. The test performs a read-only
 `GET /v1/event-catalog`: it creates nothing, and it exercises the same scope the
@@ -146,11 +159,94 @@ The selection is sent to Factuarea **when the workflow is activated**. Changing
 it later takes effect on the next activation: the destination is created once,
 with the events chosen at that moment.
 
+## Listening to a whole account
+
+Set **Listen On** to **Account** and the trigger registers an **account webhook**
+instead of a company one:
+
+```
+POST   /v1/accounts/{account}/webhooks
+GET    /v1/accounts/{account}/webhooks/{webhook}
+DELETE /v1/accounts/{account}/webhooks/{webhook}
+```
+
+Everything else about the lifecycle is the same as in company mode. Activating
+the workflow creates the destination and keeps its secret; deactivating removes
+it; the trigger never adopts a destination it did not create. A workflow saved
+before this option existed has no **Listen On** value and behaves exactly as
+Company mode: nothing about it changes.
+
+**The account.** Fill in **Account ID** on the node, or **Default Account ID** on
+the credential; the node field wins when both are filled. With neither filled the
+workflow refuses to activate and the message names both fields. You type the
+UUID yourself: the node does not pick the account from the key. Call
+`GET /v1/me` with your API key and read `data.account.id`; the same UUID appears
+in the example requests of Factuarea under **Developers**, for instance in the
+cURL example that lists the companies of your account.
+
+**The events.** In Account mode the **Events** picker offers the available events
+of the public catalogue, read live as in Company mode, plus the fifteen
+`account.*` events of the account itself:
+
+| Group | Events |
+| --- | --- |
+| Members and ownership | `account.member_added`, `account.member_removed`, `account.member_role_changed`, `account.owner_transferred`, `account.member_grant_changed` |
+| Access between accounts | `account.access_granted`, `account.access_revoked`, `account.access_level_changed` |
+| Managed accounts | `account.managed_account_provisioned`, `account.managed_account_claimed`, `account.management_ended` |
+| Tax ids and imports | `account.nif_added`, `account.nif_transferred`, `account.nif_archived`, `account.import_completed` |
+
+An account webhook can subscribe to both kinds at once, so tax-id events such as
+`invoice.paid` and `account.*` events can start the same workflow. Company mode
+never offers an `account.*` event, because a company webhook refuses them. The
+fifteen names are a fixed list in the package, because no API route serves them;
+see [docs/LIMITATIONS.md](docs/LIMITATIONS.md).
+
+**The relationship filter.** **Account Relationship** is `Own` (the tax ids of
+your account), `Managed` (the tax ids of the accounts your account manages) or
+`All` (the default). It is sent to Factuarea when the workflow is activated and
+fixed for that destination. Each delivered event says which of the two it is,
+`own` or `managed`, and never `all`.
+
+**The tax id filter.** **Company ID Filter** is optional. When it holds a company
+UUID, an event whose `company_id` is a different one is acknowledged with `200`
+and dropped without starting the workflow, so Factuarea does not retry it. An
+event with no `company_id`, one that belongs to the account itself, always starts
+the workflow. This is a filter on delivered events only: the destination still
+receives every event of the account. The filter runs after the signature check
+and before deduplication.
+
+**The item.** Besides the keys of a company delivery, the item carries
+`account` (`{ "id": "<account uuid>" }`), `account_relationship` (`own` or
+`managed`) and `company_id` (the tax id the event is about, or `null`). The same
+relationship travels in the `Factuarea-Account-Relationship` header. The
+signature, the timestamp tolerance, the two-signature rotation window and the
+deduplication on the event `id` are the ones of Company mode. See
+[docs/SIGNATURE-VERIFICATION.md](docs/SIGNATURE-VERIFICATION.md).
+
+**Requirements and exclusions.**
+
+- **A live key.** An account webhook is written only with a `fact_live_` key; the
+  node refuses a `fact_test_` key before sending anything.
+  Test endpoints are created from the Factuarea dashboard only.
+- **An owner or admin issuer.** The key must have been issued by an owner or an
+  admin of the account, with access to all of its tax ids.
+- **No OAuth.** The credential is an API key. Account webhook operations are not
+  available to an OAuth token, so there is no OAuth credential for this mode.
+- **The plan.** Account webhooks depend on the plan of the account, and each plan
+  caps how many account endpoints can exist.
+
+Each of these has a catalogued message in the node and a section in
+[docs/LIMITATIONS.md](docs/LIMITATIONS.md).
+
 ## Node parameters
 
 | Parameter | Default | What it does |
 | --- | --- | --- |
-| **Company ID** | none | UUID of the Factuarea company whose webhook destinations this trigger manages. Required, unless the credential carries a **Default Company ID**. |
+| **Listen On** | `Company` | `Company` listens to one company, `Account` to a whole account. Read when the workflow is activated. |
+| **Company ID** | none | Company mode only. UUID of the Factuarea company whose webhook destinations this trigger manages. Required, unless the credential carries a **Default Company ID**. |
+| **Account ID** | none | Account mode only. UUID of the Factuarea account whose events this trigger listens to. Required, unless the credential carries a **Default Account ID**. |
+| **Account Relationship** | `All` | Account mode only. `Own`, `Managed` or `All`. Sent when the workflow is activated and fixed for that destination. |
+| **Company ID Filter** | none | Account mode only. Optional company UUID. Events of another company are acknowledged and dropped. |
 | **Events** | none | The Factuarea events that start this workflow. Required. |
 | **Timestamp Tolerance (Seconds)** | `300` | How far the timestamp signed into a delivery may sit from this instance clock, in either direction, before the delivery is rejected even though its signature is correct. Range 30 to 3600. |
 | **Skip Repeated Events** | `true` | Answer a repeated delivery of an event already processed with success and drop it, instead of producing a second item. |
@@ -260,12 +356,13 @@ The same procedure is documented by Factuarea at
 
 | Document | Contents |
 | --- | --- |
-| [docs/LIMITATIONS.md](docs/LIMITATIONS.md) | The four measured limitations of this node and what to do about each. |
+| [docs/LIMITATIONS.md](docs/LIMITATIONS.md) | The four measured limitations of this node, the five that belong to Account mode, and what to do about each. |
 | [docs/SIGNATURE-VERIFICATION.md](docs/SIGNATURE-VERIFICATION.md) | The delivery signature, reimplementable without this package. |
 | [docs/RELEASING.md](docs/RELEASING.md) | How a version of this package is published, including the manual npm step. |
 | [docs/ENGLISH-ONLY.md](docs/ENGLISH-ONLY.md) | Why this repository is written in English while the rest of Factuarea is not. |
 | [docs/MCP-REGISTRY.md](docs/MCP-REGISTRY.md) | The decision on listing the Factuarea MCP server in n8n's MCP servers registry. |
 | [docs/PULL-REQUEST-COMPANY-AXIS.md](docs/PULL-REQUEST-COMPANY-AXIS.md) | The review and release note for the company-axis change: what it breaks, what to check, and the publication step, which is not performed here. |
+| [docs/PULL-REQUEST-ACCOUNT-MODE.md](docs/PULL-REQUEST-ACCOUNT-MODE.md) | The review and release note for Account mode: what it adds, what to check, and the publication step, which is not performed here. |
 | [CHANGELOG.md](CHANGELOG.md) | What each version contains. |
 
 ## Support

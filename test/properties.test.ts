@@ -3,7 +3,15 @@ import { describe, it } from 'node:test';
 
 import type { INodeProperties } from 'n8n-workflow';
 
-import { LOAD_OPTIONS_METHOD_EVENT_TYPES, PARAMETER_COMPANY_ID } from '../src/client/types';
+import {
+	LISTEN_ON_DEFAULT,
+	LOAD_OPTIONS_METHOD_EVENT_TYPES,
+	PARAMETER_ACCOUNT_ID,
+	PARAMETER_ACCOUNT_RELATIONSHIP,
+	PARAMETER_COMPANY_FILTER,
+	PARAMETER_COMPANY_ID,
+	PARAMETER_LISTEN_ON,
+} from '../src/client/types';
 import {
 	DEFAULT_TOLERANCE_SECONDS,
 	MAX_TOLERANCE_SECONDS,
@@ -34,17 +42,50 @@ function property(name: string): INodeProperties {
 	return found;
 }
 
+/**
+ * Whether n8n would render the property for these parameter values.
+ *
+ * n8n resolves a missing parameter to its declared default before it evaluates
+ * `displayOptions`, which is what makes a workflow saved before account mode
+ * show the company field. This helper reproduces that rule for the two shapes
+ * the trigger uses (`show` with a list of accepted values) so the tests state
+ * the behaviour instead of the wiring.
+ */
+function isShown(declared: INodeProperties, values: Record<string, unknown>): boolean {
+	const show = declared.displayOptions?.show;
+
+	if (show === undefined) {
+		return true;
+	}
+
+	return Object.entries(show).every(([name, accepted]) => {
+		const source = factuareaTriggerProperties.find((candidate) => candidate.name === name);
+		const value = name in values ? values[name] : source?.default;
+
+		return Array.isArray(accepted) && accepted.includes(value as never);
+	});
+}
+
 describe('factuareaTriggerProperties', () => {
-	it('declares exactly four properties, with the four frozen names', () => {
-		// Four is a contract, not a coincidence: `src/client/types.ts` enumerates
-		// these names as the ones the trigger reads back, so a fifth parameter
+	it('declares exactly eight properties, with the eight frozen names', () => {
+		// Eight is a contract, not a coincidence: `src/client/types.ts` enumerates
+		// these names as the ones the trigger reads back, so a ninth parameter
 		// here is one nothing consumes, and a missing one is a read of
-		// `undefined`. The order is part of it: the company is the first decision,
-		// and the editor renders them in this order.
-		assert.equal(factuareaTriggerProperties.length, 4);
+		// `undefined`. The order is part of it: the mode is the first decision,
+		// then the target of each mode, and the editor renders them in this order.
+		assert.equal(factuareaTriggerProperties.length, 8);
 		assert.deepEqual(
 			factuareaTriggerProperties.map((declared) => declared.name),
-			['companyId', 'events', 'toleranceSeconds', 'deduplicate'],
+			[
+				'listenOn',
+				'companyId',
+				'accountId',
+				'accountRelationship',
+				'companyFilter',
+				'events',
+				'toleranceSeconds',
+				'deduplicate',
+			],
 		);
 	});
 
@@ -138,5 +179,102 @@ describe('factuareaTriggerProperties', () => {
 				`property "${declared.name}" has an empty description`,
 			);
 		}
+	});
+});
+
+describe('factuareaTriggerProperties — account mode (ACC-EXT-04)', () => {
+	it('offers Company and Account as the listening mode, Company by default', () => {
+		const listenOn = property(PARAMETER_LISTEN_ON);
+
+		assert.equal(listenOn.name, 'listenOn');
+		assert.equal(listenOn.displayName, 'Listen On');
+		assert.equal(listenOn.type, 'options');
+		assert.equal(listenOn.default, 'company');
+		assert.equal(listenOn.default, LISTEN_ON_DEFAULT);
+		assert.deepEqual(
+			(listenOn.options ?? []).map((option) => ('value' in option ? [option.name, option.value] : [])),
+			[
+				['Company', 'company'],
+				['Account', 'account'],
+			],
+		);
+		// The mode itself is never hidden: it is the decision everything else hangs from.
+		assert.equal(listenOn.displayOptions, undefined);
+	});
+
+	it('reads a workflow saved without listenOn as company mode', () => {
+		// A workflow saved before account mode has no `listenOn` value at all. n8n
+		// resolves it to the declared default, so the default IS the compatibility
+		// guarantee: it has to be `company`, and the company field has to render.
+		assert.equal(property(PARAMETER_LISTEN_ON).default, 'company');
+		assert.equal(isShown(property(PARAMETER_COMPANY_ID), {}), true);
+		assert.equal(isShown(property(PARAMETER_ACCOUNT_ID), {}), false);
+	});
+
+	it('shows the company field only in company mode', () => {
+		const company = property(PARAMETER_COMPANY_ID);
+
+		assert.equal(isShown(company, { listenOn: 'company' }), true);
+		assert.equal(isShown(company, { listenOn: 'account' }), false);
+	});
+
+	it('shows the account, the relationship filter and the company filter only in account mode', () => {
+		for (const name of [
+			PARAMETER_ACCOUNT_ID,
+			PARAMETER_ACCOUNT_RELATIONSHIP,
+			PARAMETER_COMPANY_FILTER,
+		]) {
+			const declared = property(name);
+
+			assert.equal(isShown(declared, { listenOn: 'account' }), true, `${name} in account mode`);
+			assert.equal(isShown(declared, { listenOn: 'company' }), false, `${name} in company mode`);
+			assert.equal(isShown(declared, {}), false, `${name} with no mode saved`);
+		}
+	});
+
+	it('keeps the events, the tolerance and deduplication in both modes', () => {
+		for (const name of ['events', 'toleranceSeconds', 'deduplicate']) {
+			const declared = property(name);
+
+			assert.equal(isShown(declared, { listenOn: 'company' }), true, `${name} in company mode`);
+			assert.equal(isShown(declared, { listenOn: 'account' }), true, `${name} in account mode`);
+		}
+	});
+
+	it('asks for the account as a text field named Account ID, never required', () => {
+		const account = property(PARAMETER_ACCOUNT_ID);
+
+		// "Account ID" is the label the catalogued "account not selected" message
+		// tells the user to fill in, so renaming it makes that message lie.
+		assert.equal(account.displayName, 'Account ID');
+		assert.equal(account.type, 'string');
+		assert.equal(account.default, '');
+		// Not required: the credential may carry the account, and a required and
+		// empty parameter is a node issue that blocks activation.
+		assert.notEqual(account.required, true);
+		assert.equal(account.typeOptions?.loadOptionsMethod, undefined);
+		assert.match(account.description ?? '', /UUID/);
+	});
+
+	it('offers the relationship filter as own, managed and all, all by default', () => {
+		const relationship = property(PARAMETER_ACCOUNT_RELATIONSHIP);
+
+		assert.equal(relationship.type, 'options');
+		assert.equal(relationship.default, 'all');
+		assert.deepEqual(
+			(relationship.options ?? []).map((option) => ('value' in option ? option.value : undefined)),
+			['own', 'managed', 'all'],
+		);
+	});
+
+	it('offers an optional company filter that is empty by default', () => {
+		const filter = property(PARAMETER_COMPANY_FILTER);
+
+		assert.equal(filter.type, 'string');
+		assert.equal(filter.default, '');
+		assert.notEqual(filter.required, true);
+		// It narrows on the `company_id` of the envelope, which is a UUID and
+		// never a tax id; the description has to say so.
+		assert.match(filter.description ?? '', /UUID/);
 	});
 });

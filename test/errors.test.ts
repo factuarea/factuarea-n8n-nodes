@@ -257,3 +257,67 @@ describe('the error catalogue', () => {
 		assert.match(mentionsOnly, /const x = 1;/);
 	});
 });
+
+describe('the account-mode messages', () => {
+	/**
+	 * The seven messages account mode adds, each with what it must name to be
+	 * actionable. The generic tests above already hold them to English, a next
+	 * step, no secrets and reachability from production code; this block pins the
+	 * promise each one makes by name.
+	 */
+	const ACCOUNT_MESSAGES: ReadonlyArray<{
+		key: NodeErrorKey;
+		mustMention: RegExp[];
+	}> = [
+		{ key: 'accountNotSelected', mustMention: [/Account ID/, /Default Account ID/, /credential/i] },
+		{ key: 'accountNotFound', mustMention: [/Account ID/, /Default Account ID/, /GET \/v1\/me/, /data\.account\.id/] },
+		{ key: 'liveCredentialRequired', mustMention: [/live/i, /test/i] },
+		{ key: 'accountCapabilityRequired', mustMention: [/owner/i, /admin/i, /every tax ID|all tax IDs/i] },
+		{ key: 'accountEndpointLimitReached', mustMention: [/account/i, /limit/i] },
+		{ key: 'accountWebhooksAddonRequired', mustMention: [/plan/i, /account webhooks/i] },
+		{ key: 'accountEndpointCreatorLostCapability', mustMention: [/disabled/i, /owner|admin/i] },
+	];
+
+	it('has all seven, catalogued in NODE_ERRORS', () => {
+		for (const { key } of ACCOUNT_MESSAGES) {
+			assert.equal(typeof NODE_ERRORS[key], 'string', `${key} is missing from NODE_ERRORS`);
+		}
+	});
+
+	it('points to the cURL example of Developers for the account UUID, not to a page that does not exist', () => {
+		assert.match(NODE_ERRORS.accountNotSelected, /cURL example in Settings, Developers/);
+		assert.doesNotMatch(NODE_ERRORS.accountNotSelected, /Settings, Account\b/);
+	});
+
+	it('names GET /v1/me as the source of the account UUID, next to the cURL example', () => {
+		assert.match(NODE_ERRORS.accountNotSelected, /GET \/v1\/me/);
+		assert.match(NODE_ERRORS.accountNotSelected, /data\.account\.id/);
+	});
+
+	it('names what each one promises', () => {
+		for (const { key, mustMention } of ACCOUNT_MESSAGES) {
+			for (const pattern of mustMention) {
+				assert.match(NODE_ERRORS[key], pattern, `${key} does not mention ${pattern}`);
+			}
+		}
+	});
+
+	it('keeps the company message untouched next to them', () => {
+		assert.match(NODE_ERRORS.companyNotSelected, /Company ID/);
+		assert.match(NODE_ERRORS.companyNotSelected, /Default Company ID/);
+	});
+
+	it('passes the English-only gate', () => {
+		const gate = path.join(SOURCE_ROOT, '..', 'scripts', 'check-english-only.mjs');
+
+		assert.ok(existsSync(gate), `the gate was not found at ${gate}`);
+
+		// The gate reads source files, and the messages live in `errors.ts`, so the
+		// real run is `npm run lint:english`. Here the cheap, equivalent signal:
+		// no accented character and no common Spanish function word.
+		for (const { key } of ACCOUNT_MESSAGES) {
+			assert.doesNotMatch(NODE_ERRORS[key], /[áéíóúñ¿¡]/i, `${key} reads as Spanish`);
+			assert.doesNotMatch(NODE_ERRORS[key], /\b(cuenta|clave|empresa|webhook de)\b/i, `${key} reads as Spanish`);
+		}
+	});
+});

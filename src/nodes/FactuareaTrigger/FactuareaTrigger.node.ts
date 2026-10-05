@@ -22,7 +22,17 @@
  * the event picker from `loadEventOptions.ts`, the activation and deactivation
  * from `webhookLifecycle.ts`, and the three security decisions from
  * `src/verify/` and `src/dedupe/`. This file decides which of them runs, in what
- * order, and what each outcome answers on the wire — and nothing else. That is
+ * order, and what each outcome answers on the wire — and nothing else.
+ *
+ * ## One node, two modes
+ *
+ * The same node listens either to one company (the default, and the behaviour of
+ * every workflow saved before account mode existed) or to a whole account. The
+ * mode only changes WHERE the endpoint is registered, which
+ * `webhookLifecycle.ts` handles, and ONE decision on a delivery: the optional
+ * company filter below. The signature scheme, the tolerance window, the
+ * rotation rule and the deduplication are the same code for both, because the
+ * account emitter reuses the company signer and the same event id. That is
  * why the order below carries the longest comment in the package: it is the one
  * decision no other module can state, because no other module can see two steps
  * at once.
@@ -40,7 +50,13 @@ import type {
 	WebhookSetupMethodNames,
 } from 'n8n-workflow';
 
-import { LOAD_OPTIONS_METHOD_EVENT_TYPES, STATIC_DATA_SECRET } from '../../client/types';
+import {
+	LISTEN_ON_DEFAULT,
+	LOAD_OPTIONS_METHOD_EVENT_TYPES,
+	PARAMETER_COMPANY_FILTER,
+	PARAMETER_LISTEN_ON,
+	STATIC_DATA_SECRET,
+} from '../../client/types';
 import { DEFAULT_TOLERANCE_SECONDS, DELIVERY_HEADER_LOOKUP } from '../../contract';
 import { createEventDeduplicator } from '../../dedupe/eventDeduplicator';
 import type { DeduplicationState } from '../../dedupe/eventDeduplicator';
@@ -75,6 +91,14 @@ const WEBHOOK_NAME = 'default';
  */
 const PARAMETER_TOLERANCE = 'toleranceSeconds';
 const PARAMETER_DEDUPLICATE = 'deduplicate';
+
+/**
+ * Account mode only: the optional company (tax id) a delivery must belong to.
+ *
+ * `PARAMETER_LISTEN_ON` and `PARAMETER_COMPANY_FILTER` are the frozen names of
+ * `src/client/types.ts`; they are read here, on the delivery path, and by
+ * `webhookLifecycle.ts` (the mode) on the lifecycle path.
+ */
 
 /**
  * The two status codes this node sends itself.
@@ -191,6 +215,42 @@ function deduplicationEnabled(context: IWebhookFunctions): boolean {
 }
 
 /**
+ * Whether this delivery belongs to a company the account filter excludes.
+ *
+ * Only account mode filters. The filter is the node's optional `companyFilter`;
+ * empty means no filter. A delivery is dropped ONLY when its envelope carries a
+ * `company_id` that is a different one: an event with no `company_id` is an
+ * event of the account itself (a member added, ownership transferred), which
+ * belongs to no company and therefore to every filter. The comparison trims and
+ * ignores case, because the filter is typed by a person and a UUID is the same
+ * UUID in either case.
+ *
+ * This runs on a body that has already been proven Factuarea's, so reading
+ * `company_id` from it is reading trusted input.
+ */
+function excludedByCompanyFilter(
+	context: IWebhookFunctions,
+	body: Record<string, unknown>,
+): boolean {
+	const mode = context.getNodeParameter(PARAMETER_LISTEN_ON, LISTEN_ON_DEFAULT);
+
+	if (mode !== 'account') {
+		return false;
+	}
+
+	const filter = context.getNodeParameter(PARAMETER_COMPANY_FILTER, '');
+	const wanted = typeof filter === 'string' ? filter.trim().toLowerCase() : '';
+
+	if (wanted === '') {
+		return false;
+	}
+
+	const companyId = body['company_id'];
+
+	return typeof companyId === 'string' && companyId.trim().toLowerCase() !== wanted;
+}
+
+/**
  * The signing secret this node stored when it created its destination.
  *
  * An empty string when there is none — the destination was never created, or the
@@ -238,6 +298,20 @@ function acknowledgeDuplicate(context: IWebhookFunctions): IWebhookResponseData 
 	return { noWebhookResponse: true };
 }
 
+/**
+ * Accept and drop a delivery the company filter excludes: HTTP 200, no item.
+ *
+ * The 200 is deliberate (design D11). An error would make the emitter retry and
+ * finally disable an endpoint over deliveries that are not failures: the event
+ * is real and valid, it is just not this workflow's. Same wire answer as a
+ * duplicate, a different reason.
+ */
+function acknowledgeFiltered(context: IWebhookFunctions): IWebhookResponseData {
+	context.getResponseObject().status(STATUS_DUPLICATE_ACCEPTED).end();
+
+	return { noWebhookResponse: true };
+}
+
 export class FactuareaTrigger implements INodeType {
 	description: INodeTypeDescription = {
 		displayName: 'Factuarea Trigger',
@@ -246,7 +320,8 @@ export class FactuareaTrigger implements INodeType {
 		group: ['trigger'],
 		version: 1,
 		subtitle: '=Events: {{ $parameter["events"].join(", ") }}',
-		description: 'Starts the workflow when Factuarea delivers a signed webhook event',
+		description:
+			'Starts the workflow when Factuarea delivers a signed webhook event, for one company or for a whole account',
 		defaults: {
 			name: 'Factuarea Trigger',
 		},
@@ -386,6 +461,14 @@ export class FactuareaTrigger implements INodeType {
 		// Past this line the body is proven to be Factuarea's, unmodified and
 		// recent. Everything below reads it as trusted input.
 		const body = this.getBodyData();
+
+		// ACCOUNT MODE ONLY: a verified event of another company is acknowledged
+		// and dropped. It sits AFTER the signature, because the `company_id` it
+		// reads is inside the signed body, and BEFORE the deduplicator, so an event
+		// this workflow ignores is not recorded as handled.
+		if (excludedByCompanyFilter(this, body)) {
+			return acknowledgeFiltered(this);
+		}
 
 		if (deduplicationEnabled(this)) {
 			// The key is the event id from the BODY, which is inside the signed

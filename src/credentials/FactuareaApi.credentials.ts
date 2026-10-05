@@ -5,7 +5,7 @@ import type {
 	INodeProperties,
 } from 'n8n-workflow';
 
-import { CREDENTIAL_FIELD_COMPANY_ID } from '../client/types';
+import { CREDENTIAL_FIELD_ACCOUNT_ID, CREDENTIAL_FIELD_COMPANY_ID } from '../client/types';
 import { DEFAULT_API_BASE_URL } from '../contract';
 
 /**
@@ -58,6 +58,17 @@ import { DEFAULT_API_BASE_URL } from '../contract';
  * API dropped, and reproducing it here would put a trigger on a company nobody
  * chose. When both are empty the trigger refuses to activate and says so.
  *
+ * ## The account field is a DEFAULT too, typed by the integrator and used only by account mode
+ *
+ * The trigger has a second mode that listens to a whole account, and its routes
+ * carry the account in the path (`/v1/accounts/{account}/webhooks`). The same
+ * rules apply as for the company, for the same reasons: the base URL stops at
+ * the version and never carries an account, the node's own Account ID field
+ * wins when it is filled, and the account is NEVER inferred from the key. When
+ * both are empty the trigger refuses to activate. The field is optional and
+ * empty by default, so a credential written before account mode keeps working
+ * unchanged, and company mode never reads it.
+ *
  * ## Why the credential test hits a READ route
  *
  * `GET /v1/event-catalog` creates nothing, consumes no write quota and is
@@ -91,7 +102,7 @@ export class FactuareaApi implements ICredentialType {
 			default: '',
 			required: true,
 			description:
-				'API key from Factuarea (Settings, Developers, API keys). It needs the scopes events:read, webhooks:read, webhooks:write and webhooks:delete, because the trigger reads the event catalogue and registers and removes its own webhook destination.',
+				'API key from Factuarea (Settings, Developers, API keys). It needs the scopes events:read, webhooks:read, webhooks:write and webhooks:delete, because the trigger reads the event catalogue and registers and removes its own webhook destination. Account mode also needs a live key (a test key cannot create an account webhook) issued by an owner or admin of the account.',
 		},
 		{
 			displayName: 'Base URL',
@@ -110,6 +121,15 @@ export class FactuareaApi implements ICredentialType {
 			default: '',
 			description:
 				'UUID of the Factuarea company this key works with, used by a trigger that leaves its own Company ID field empty. Fill it in when the account works with a single company, so it is typed once instead of once per workflow. It is never inferred from the key: when this field and the Company ID field of the node are both empty, the trigger refuses to activate rather than registering a destination on a company nobody chose.',
+		},
+		{
+			displayName: 'Default Account ID',
+			// Frozen in `src/client/types.ts` next to the node parameter it backs.
+			name: CREDENTIAL_FIELD_ACCOUNT_ID,
+			type: 'string',
+			default: '',
+			description:
+				'UUID of the Factuarea account this key belongs to, used by a trigger in account mode that leaves its own Account ID field empty. You type it: it is the UUID returned by GET /v1/me with this key, in data.account.id; the example requests of Factuarea under Developers, such as the cURL example that lists the companies of your account, show it too. It is never inferred from the key, so when this field and the Account ID field of the node are both empty, an account mode trigger refuses to activate. Only account mode reads it; company mode ignores it.',
 		},
 	];
 
