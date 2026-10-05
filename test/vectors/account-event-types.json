@@ -2,8 +2,8 @@
 	"$meta": {
 		"description": "The fifteen account.* event types, extracted from components.schemas.AccountEventType.enum of the frozen public API document. Do not edit by hand: regenerate with the extraction command.",
 		"source": "the frozen Factuarea public API OpenAPI document (openapi-public.json)",
-		"source_sha256": "cf6c30c9d527fbf0590f0dca9f652e750351fa72975f14ced00de494ff18e559",
-		"source_canonical_digest": "811b3091237099073e8b5bbd0aa5c60ae8ff7c97202508c7c3cc2516ce0ad64e",
+		"source_sha256": "219cd21f7e3cddad8cd02c4e2a9750d53e588da7b72e0de456a67fc71a701f20",
+		"source_canonical_digest": "74d827c4eb105e045a32b151d4079228be730c7a450c341ca62f5222eea997ee",
 		"schema_path": "components.schemas.AccountEventType.enum",
 		"extraction_command": "node scripts/extract-account-event-types.mjs <path-to-openapi.json>"
 	},
