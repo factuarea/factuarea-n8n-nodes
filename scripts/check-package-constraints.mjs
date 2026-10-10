@@ -204,8 +204,8 @@ function checkRuntimeDependencies(manifest, report) {
 }
 
 /**
- * The manifest declares exactly one node and exactly one credential, the files
- * it points at exist in the artefact, and the node is a TRIGGER.
+ * The manifest retains the Factuarea trigger and may register the native CRM
+ * action for the same service. It still declares exactly one credential.
  *
  * ## How "is a trigger" is decided, and why it is read and not executed
  *
@@ -229,7 +229,7 @@ function checkManifestShape(artefactRoot, manifest, report) {
 		return;
 	}
 
-	const nodes = checkSingleEntry(n8n.nodes, 'n8n.nodes', 'node', report);
+	const nodes = checkFactuareaNodes(n8n.nodes, report);
 	checkSingleEntry(n8n.credentials, 'n8n.credentials', 'credential', report);
 
 	for (const [key, entries] of [
@@ -254,7 +254,31 @@ function checkManifestShape(artefactRoot, manifest, report) {
 		return;
 	}
 
-	checkNodeIsTrigger(artefactRoot, nodes, report);
+	checkNodeIsTrigger(artefactRoot, nodes[0], report);
+	if (nodes[1] !== undefined) checkNodeIsCrmAction(artefactRoot, nodes[1], report);
+}
+
+function checkFactuareaNodes(value, report) {
+	const trigger = 'dist/src/nodes/FactuareaTrigger/FactuareaTrigger.node.js';
+	const crm = 'dist/src/nodes/FactuareaCrm/FactuareaCrm.node.js';
+	if (!Array.isArray(value) || value.length === 0) {
+		report('package.json', '"n8n.nodes" must retain the registered Factuarea trigger.');
+		return undefined;
+	}
+	if (value[0] !== trigger) report('package.json', '"n8n.nodes[0]" must retain the registered Factuarea trigger.');
+	for (const added of value.slice(1)) {
+		if (added !== crm || value.length > 2) report('package.json', `"n8n.nodes" permits only the registered Factuarea trigger and CRM action. Added entry: "${added}".`);
+	}
+	return typeof value[0] === 'string' ? value : undefined;
+}
+
+function checkNodeIsCrmAction(artefactRoot, nodePath, report) {
+	const absolute = path.join(artefactRoot, nodePath);
+	if (!fs.existsSync(absolute)) return;
+	const source = stripComments(fs.readFileSync(absolute, 'utf8'));
+	if (!/\bgroup\s*:\s*\[\s*['"]transform['"]\s*\]/.test(source) || !/\bname\s*:\s*['"]factuareaCrm['"]/.test(source) || !/\basync\s+execute\s*\(/.test(source) || !/\bname\s*:\s*['"]factuareaApi['"]/.test(source)) {
+		report(nodePath, 'the registered CRM action must declare the Factuarea CRM name, transform group, execute method and existing Factuarea API credential.');
+	}
 }
 
 /**
@@ -292,7 +316,7 @@ function checkNodeIsTrigger(artefactRoot, nodePath, report) {
 	if (!nodePath.endsWith('Trigger.node.js')) {
 		report(
 			'package.json',
-			`"n8n.nodes[0]" points at "${nodePath}", whose name does not end in "Trigger.node.js". This package publishes a trigger and nothing else.`,
+			`"n8n.nodes[0]" points at "${nodePath}", whose name does not end in "Trigger.node.js". The first registered node must remain the trigger.`,
 		);
 	}
 

@@ -1,7 +1,7 @@
 {
   "name": "n8n-nodes-factuarea",
   "version": "0.1.2",
-  "description": "n8n trigger node for Factuarea — starts a workflow when Factuarea delivers a signed webhook event.",
+  "description": "Factuarea nodes for n8n: signed webhook triggers and native CRM actions.",
   "license": "MIT",
   "author": {
     "name": "Factuarea",
@@ -33,7 +33,9 @@
   "files": [
     "dist/src",
     "LICENSE",
-    "README.md"
+    "README.md",
+    "docs/CRM.md",
+    "docs/recipes/web-lead-follow-up.workflow.json"
   ],
   "publishConfig": {
     "access": "public",
@@ -45,7 +47,8 @@
       "dist/src/credentials/FactuareaApi.credentials.js"
     ],
     "nodes": [
-      "dist/src/nodes/FactuareaTrigger/FactuareaTrigger.node.js"
+      "dist/src/nodes/FactuareaTrigger/FactuareaTrigger.node.js",
+      "dist/src/nodes/FactuareaCrm/FactuareaCrm.node.js"
     ]
   },
   "scripts": {

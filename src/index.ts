@@ -16,13 +16,14 @@
  *
  * ## Named re-exports, not a star
  *
- * Both classes are re-exported by name. A star re-export would silently widen
+ * The registered classes are re-exported by name. A star re-export would silently widen
  * the package's public surface with whatever a module happens to export next,
- * and the surface here is meant to be exactly two things: one trigger node and
- * one credential type. That is also what the manifest declares and what the
+ * and the surface here contains a trigger, a CRM action and one credential
+ * type. That is also what the manifest declares and what the
  * package gate checks, so anything else appearing here would make the two
  * disagree.
  */
 
 export { FactuareaTrigger } from './nodes/FactuareaTrigger/FactuareaTrigger.node';
 export { FactuareaApi } from './credentials/FactuareaApi.credentials';
+export { FactuareaCrm } from './nodes/FactuareaCrm/FactuareaCrm.node';

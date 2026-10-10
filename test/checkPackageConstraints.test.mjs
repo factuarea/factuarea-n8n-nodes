@@ -31,6 +31,7 @@ const WORKSPACE = fs.mkdtempSync(path.join(os.tmpdir(), 'factuarea-n8n-package-g
 after(() => fs.rmSync(WORKSPACE, { recursive: true, force: true }));
 
 const NODE_PATH = 'dist/src/nodes/FactuareaTrigger/FactuareaTrigger.node.js';
+const CRM_NODE_PATH = 'dist/src/nodes/FactuareaCrm/FactuareaCrm.node.js';
 const CREDENTIAL_PATH = 'dist/src/credentials/FactuareaApi.credentials.js';
 
 const MIT_LICENCE = `MIT License
@@ -206,7 +207,36 @@ describe('check-package-constraints', () => {
 
 		assert.equal(status, 1, `the gate accepted a second node:\n${output}`);
 		assert.match(output, /Factuarea\.node\.js/);
-		assert.match(output, /exactly one node/);
+		assert.match(output, /only the registered Factuarea trigger and CRM action/);
+	});
+
+	it('accepts the registered native CRM action alongside the unchanged trigger', () => {
+		const root = artefact('crm-action', (manifest, files) => {
+			manifest.n8n.nodes.push(CRM_NODE_PATH);
+			files[CRM_NODE_PATH] = "class FactuareaCrm { description = { name: 'factuareaCrm', group: ['transform'], credentials: [{ name: 'factuareaApi' }] }; async execute() { return [[]]; } }";
+		});
+		const { status, output } = runGate(root);
+		assert.equal(status, 0, output);
+	});
+
+	it('rejects a CRM action without its execution or existing credential contract', () => {
+		const root = artefact('invalid-crm-action', (manifest, files) => {
+			manifest.n8n.nodes.push(CRM_NODE_PATH);
+			files[CRM_NODE_PATH] = "class FactuareaCrm { description = { name: 'factuareaCrm', group: ['transform'] }; }";
+		});
+		const { status, output } = runGate(root);
+		assert.equal(status, 1, output);
+		assert.match(output, /execute method and existing Factuarea API credential/);
+	});
+
+	it('rejects a third node even when the CRM action is registered', () => {
+		const root = artefact('third-node', (manifest, files) => {
+			manifest.n8n.nodes.push(CRM_NODE_PATH, CRM_NODE_PATH);
+			files[CRM_NODE_PATH] = "class FactuareaCrm { description = { name: 'factuareaCrm', group: ['transform'], credentials: [{ name: 'factuareaApi' }] }; async execute() { return [[]]; } }";
+		});
+		const { status, output } = runGate(root);
+		assert.equal(status, 1, output);
+		assert.match(output, /only the registered Factuarea trigger and CRM action/);
 	});
 
 	it('rejects an import of the file system and names the file and the line', () => {

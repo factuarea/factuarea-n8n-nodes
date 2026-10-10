@@ -4,6 +4,17 @@ All notable changes to `n8n-nodes-factuarea` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the package
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+- Add the Factuarea CRM action to create, read, list and update native leads,
+  opportunities and activities, with contact-person search, authorized dynamic
+  selectors and complete pagination
+  with explicit caps. Updates preserve exact CAS and every write requires a
+  stable original key. Unconfirmed writes support explicit original recovery.
+- Register the CRM action beside the existing trigger without adding runtime
+  dependencies or changing trigger behavior. The package gate retains its
+  trigger, credential, license, environment and filesystem constraints.
+
 ## 0.1.2 — 2026-09-05
 
 - `package.json` declares `author.name` (Factuarea), required by the official n8n community node scan (`community-package-json-author-name-missing`). No functional change.

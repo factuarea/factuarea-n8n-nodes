@@ -1,6 +1,6 @@
 # n8n-nodes-factuarea
 
-An n8n **trigger node** for [Factuarea](https://factuarea.com). It starts a
+An n8n **trigger and native CRM action** package for [Factuarea](https://factuarea.com). The trigger starts a
 workflow when Factuarea delivers a signed webhook event: an invoice is paid, a
 quote is accepted, a store order is invoiced, and so on.
 
@@ -8,9 +8,11 @@ The node registers its own webhook destination in your Factuarea account when
 you activate the workflow, verifies the HMAC-SHA256 signature of every delivery
 it receives, and removes the destination again when you deactivate the workflow.
 
-This package contains **one trigger node and one credential**. It does not
-create, read or modify anything in Factuarea beyond its own webhook destination.
-To call the Factuarea API from a workflow, use n8n's HTTP Request node against
+This package contains **Factuarea Trigger**, **Factuarea CRM** and one encrypted
+API credential. Factuarea CRM creates, reads, lists and updates leads,
+opportunities and activities, and searches contact people using the native CRM
+API. See [CRM operations, scopes and the inbound recipe](docs/CRM.md).
+For other Factuarea API operations, use n8n's HTTP Request node against
 the [public API](https://docs.factuarea.com), or the MCP Client Tool node
 against `https://mcp.factuarea.com`.
 
