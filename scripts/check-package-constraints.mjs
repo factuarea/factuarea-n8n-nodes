@@ -205,7 +205,7 @@ function checkRuntimeDependencies(manifest, report) {
 
 /**
  * The manifest retains the Factuarea trigger and may register the native CRM
- * action for the same service. It still declares exactly one credential.
+ * action for the same service. It preserves the genuine API-key credential and may add the native CRM OAuth credential.
  *
  * ## How "is a trigger" is decided, and why it is read and not executed
  *
@@ -230,7 +230,10 @@ function checkManifestShape(artefactRoot, manifest, report) {
 	}
 
 	const nodes = checkFactuareaNodes(n8n.nodes, report);
-	checkSingleEntry(n8n.credentials, 'n8n.credentials', 'credential', report);
+	const credentials = n8n.credentials;
+	const api = 'dist/src/credentials/FactuareaApi.credentials.js', oauth = 'dist/src/credentials/FactuareaCrmOAuth2Api.credentials.js';
+	if (!Array.isArray(credentials) || ![1,2].includes(credentials.length) || credentials[0] !== api || credentials.length === 2 && credentials[1] !== oauth)
+		report('package.json', '"n8n.credentials" must preserve the genuine API-key credential and may add only native CRM OAuth2.');
 
 	for (const [key, entries] of [
 		['n8n.nodes', Array.isArray(n8n.nodes) ? n8n.nodes : []],
@@ -256,6 +259,8 @@ function checkManifestShape(artefactRoot, manifest, report) {
 
 	checkNodeIsTrigger(artefactRoot, nodes[0], report);
 	if (nodes[1] !== undefined) checkNodeIsCrmAction(artefactRoot, nodes[1], report);
+	if (nodes[2] !== undefined) checkNodeIsWhatsAppAction(artefactRoot, nodes[2], report);
+	if (nodes[3] !== undefined) checkNodeIsMetaAction(artefactRoot, nodes[3], report);
 }
 
 function checkFactuareaNodes(value, report) {
@@ -266,10 +271,18 @@ function checkFactuareaNodes(value, report) {
 		return undefined;
 	}
 	if (value[0] !== trigger) report('package.json', '"n8n.nodes[0]" must retain the registered Factuarea trigger.');
-	for (const added of value.slice(1)) {
-		if (added !== crm || value.length > 2) report('package.json', `"n8n.nodes" permits only the registered Factuarea trigger and CRM action. Added entry: "${added}".`);
-	}
+	const whatsapp = 'dist/src/nodes/FactuareaWhatsApp/FactuareaWhatsApp.node.js';
+	value.slice(1).forEach((added, offset) => {
+		if (added !== [crm, whatsapp, 'dist/src/nodes/crmMetaNativeBatch80/FactuareaMeta.node.js'][offset] || value.length > 4) report('package.json', `"n8n.nodes" permits only the registered Factuarea trigger, CRM action and native WhatsApp action, with the native Meta action as fourth entry. Added entry: "${added}".`);
+	});
 	return typeof value[0] === 'string' ? value : undefined;
+}
+
+function checkNodeIsWhatsAppAction(artefactRoot, nodePath, report) {
+ const absolute = path.join(artefactRoot, nodePath);
+ if (!fs.existsSync(absolute)) return;
+ const source = stripComments(fs.readFileSync(absolute, 'utf8'));
+ if (!/\bname\s*:\s*['"]factuareaWhatsApp['"]/.test(source) || !/\bgroup\s*:\s*\[\s*['"]transform['"]\s*\]/.test(source) || !/\basync\s+execute\s*\(/.test(source) || !/\bname\s*:\s*['"]factuareaApi['"]/.test(source)) report(nodePath, 'the registered WhatsApp action must preserve its native name, transform group, execute method and genuine API-key credential.');
 }
 
 function checkNodeIsCrmAction(artefactRoot, nodePath, report) {
@@ -549,3 +562,10 @@ function main(argv) {
 }
 
 process.exitCode = main(process.argv);
+
+function checkNodeIsMetaAction(artefactRoot, nodePath, report) {
+ const absolute = path.join(artefactRoot, nodePath);
+ if (!fs.existsSync(absolute)) return;
+ const source = stripComments(fs.readFileSync(absolute, "utf8"));
+ if (!/\bname\s*:\s*['"]factuareaMeta['"]/.test(source) || !/\bgroup\s*:\s*\[\s*['"]transform['"]\s*\]/.test(source) || !/\basync\s+execute\s*\(/.test(source) || !/\bname\s*:\s*['"]factuareaApi['"]/.test(source) || !/\bname\s*:\s*['"]factuareaCrmOAuth2Api['"]/.test(source)) report(nodePath, "the registered Meta action must preserve native name, transform group, execute method and original API-key/OAuth credentials.");
+}

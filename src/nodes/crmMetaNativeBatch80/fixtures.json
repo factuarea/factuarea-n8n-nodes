@@ -1,0 +1,194 @@
+{
+  "provenance": "SYNTHETIC offline unit fixture derived from frozen native HTTP_CONTRACT and NativeMetaOAuthFixture. No official external account, sandbox, App Review or observed grant evidence.",
+  "choices": {
+    "options": {},
+    "mapping": {
+      "connection_uuid": "01929eac-2cec-7000-8000-000000000001",
+      "form_uuid": "01929eac-2cec-7000-8000-000000000010"
+    },
+    "inspect": {
+      "connection_uuid": "01929eac-2cec-7000-8000-000000000001",
+      "form_uuid": "01929eac-2cec-7000-8000-000000000010",
+      "input_json": "{\"credential_uuid\": \"01929eac-2cec-7000-8000-000000000002\", \"remote_form_id\": \"90004\"}"
+    },
+    "publishMapping": {
+      "connection_uuid": "01929eac-2cec-7000-8000-000000000001",
+      "form_uuid": "01929eac-2cec-7000-8000-000000000010",
+      "input_json": "{\"credential_uuid\": \"01929eac-2cec-7000-8000-000000000002\", \"remote_form_id\": \"90004\", \"mapping\": [{\"remote_name\": \"full_name\", \"target\": \"name\", \"type\": \"text\", \"field_version\": null, \"required\": true, \"options\": {}}, {\"remote_name\": \"custom_question\", \"target\": \"01929eac-2cec-7000-8000-000000000020\", \"type\": \"select\", \"field_version\": 4, \"required\": true, \"options\": {\"Remote A\": \"01929eac-2cec-7000-8000-000000000021\"}}], \"expected_mapping_version\": null, \"expected_publication_version\": 7, \"fields_snapshot_checksum\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}",
+      "confirmed": true
+    },
+    "prepareOAuth": {
+      "input_json": "{\"page_id\": \"90002\"}",
+      "confirmed": true
+    },
+    "completeOAuth": {
+      "input_json": "{\"state\": \"01929eac-2cec-7000-8000-000000000022\", \"code\": \"synthetic-native-code\"}"
+    },
+    "publishConsent": {
+      "connection_uuid": "01929eac-2cec-7000-8000-000000000001",
+      "input_json": "{\"credential_uuid\": \"01929eac-2cec-7000-8000-000000000002\", \"grants\": [{\"stream\": \"01929eac-2cec-7000-8000-000000000010\", \"actions\": [\"read\", \"ingest\"]}], \"expected_consent_version\": null}",
+      "confirmed": true
+    }
+  },
+  "responses": {
+    "options": {
+      "data": {
+        "options": [
+          {
+            "connection_uuid": "01929eac-2cec-7000-8000-000000000001",
+            "credential_uuid": "01929eac-2cec-7000-8000-000000000002",
+            "page_id": "90002",
+            "page_name": "Synthetic Page"
+          }
+        ]
+      }
+    },
+    "mapping": {
+      "data": {
+        "status": "mapping_published",
+        "connection_uuid": "01929eac-2cec-7000-8000-000000000001",
+        "credential_uuid": "01929eac-2cec-7000-8000-000000000002",
+        "form_uuid": "01929eac-2cec-7000-8000-000000000010",
+        "page_id": "90002",
+        "remote_form_id": "90004",
+        "mapping_version": 1,
+        "publication_version": 7,
+        "fields_snapshot_checksum": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "mapping": [
+          {
+            "remote_name": "full_name",
+            "target": "name",
+            "type": "text",
+            "field_version": null,
+            "required": true,
+            "options": {}
+          },
+          {
+            "remote_name": "custom_question",
+            "target": "01929eac-2cec-7000-8000-000000000020",
+            "type": "select",
+            "field_version": 4,
+            "required": true,
+            "options": {
+              "Remote A": "01929eac-2cec-7000-8000-000000000021"
+            }
+          }
+        ]
+      }
+    },
+    "inspect": {
+      "data": {
+        "status": "mapping_inspected",
+        "connection_uuid": "01929eac-2cec-7000-8000-000000000001",
+        "credential_uuid": "01929eac-2cec-7000-8000-000000000002",
+        "form_uuid": "01929eac-2cec-7000-8000-000000000010",
+        "page_id": "90002",
+        "remote_form_id": "90004",
+        "app_id": "90001",
+        "responsible_uuid": "01929eac-2cec-7000-8000-000000000003",
+        "remote_field_names": [
+          "full_name",
+          "custom_question"
+        ],
+        "publication_version": 7,
+        "authorization_version": 3,
+        "configuration_version": 5,
+        "fields_snapshot_checksum": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "expected_mapping_version": null,
+        "expected_consent_version": null,
+        "destination": {
+          "basic_fields": [
+            "name",
+            "email",
+            "phone",
+            "mobile",
+            "company_name",
+            "notes"
+          ],
+          "required_basic_fields": [
+            "name"
+          ],
+          "allowed_field_ids": [
+            "01929eac-2cec-7000-8000-000000000020"
+          ],
+          "required_field_ids": [
+            "01929eac-2cec-7000-8000-000000000020"
+          ],
+          "fields_snapshot": {
+            "scope": "lead",
+            "definition_version": 7,
+            "fields": [
+              {
+                "id": "01929eac-2cec-7000-8000-000000000020",
+                "type": "select",
+                "version": 4,
+                "required": true,
+                "options": [
+                  {
+                    "id": "01929eac-2cec-7000-8000-000000000021",
+                    "label": "Original published choice",
+                    "active": true
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "app_review": {
+          "available": false,
+          "reason": "app_review_evidence_unavailable"
+        }
+      }
+    },
+    "publishMapping": {
+      "data": {
+        "status": "mapping_published",
+        "connection_uuid": "01929eac-2cec-7000-8000-000000000001",
+        "credential_uuid": "01929eac-2cec-7000-8000-000000000002",
+        "form_uuid": "01929eac-2cec-7000-8000-000000000010",
+        "page_id": "90002",
+        "remote_form_id": "90004",
+        "mapping_version": 1,
+        "publication_version": 7,
+        "fields_snapshot_checksum": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "mapping": [
+          {
+            "remote_name": "full_name",
+            "target": "name",
+            "type": "text",
+            "field_version": null,
+            "required": true,
+            "options": {}
+          },
+          {
+            "remote_name": "custom_question",
+            "target": "01929eac-2cec-7000-8000-000000000020",
+            "type": "select",
+            "field_version": 4,
+            "required": true,
+            "options": {
+              "Remote A": "01929eac-2cec-7000-8000-000000000021"
+            }
+          }
+        ]
+      }
+    },
+    "prepareOAuth": {
+      "authorization_url": "https://www.facebook.com/v25.0/dialog/oauth?client_id=90001&state=01929eac-2cec-7000-8000-000000000022",
+      "state": "01929eac-2cec-7000-8000-000000000022"
+    },
+    "completeOAuth": {
+      "status": "credentials_installed",
+      "connection_uuid": "01929eac-2cec-7000-8000-000000000001",
+      "credential_uuid": "01929eac-2cec-7000-8000-000000000002",
+      "page_id": "90002",
+      "scopes": [
+        "leads_retrieval",
+        "pages_show_list"
+      ]
+    },
+    "publishConsent": {
+      "error": "meta_oauth_unconfirmed"
+    }
+  }
+}

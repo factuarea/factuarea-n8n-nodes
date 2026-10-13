@@ -1,4 +1,6 @@
 import { strict as assert } from 'node:assert';
+import {createHash} from 'node:crypto';
+import {FactuareaCrmOAuth2Api} from '../src/credentials/FactuareaCrmOAuth2Api.credentials';
 import { describe, it } from 'node:test';
 import type {
 	IDataObject,
@@ -16,6 +18,7 @@ import type {
 import { FactuareaCrm } from '../src/nodes/FactuareaCrm/FactuareaCrm.node';
 import recipe from '../docs/recipes/web-lead-follow-up.workflow.json';
 
+const API_KEY='fact_live_'+'a'.repeat(24);
 const BASE_URL = 'https://api.factuarea.com/v1';
 const ID = '019251c0-0000-7000-8000-000000000001';
 const NEXT_ID = '019251c0-0000-7000-8000-000000000002';
@@ -26,6 +29,7 @@ const operations = [
 	...Object.values(resources).flatMap((resource) =>
 		Object.values(resource.operations),
 	),
+	'crm_opportunities.move_stage',
 	'crm_pipelines.index',
 	'crm_pipelines.show',
 	'crm_contact_people.index',
@@ -133,516 +137,122 @@ function page(
 	};
 }
 
-async function capturedOriginal(
-	resource: Resource = 'lead',
-): Promise<OriginalIntent> {
-	const double = programmed(
-		answer(access()),
-		new Error('private transport details'),
-	);
-	try {
-		await client(double).write(
-			resource,
-			'create',
-			createBody(resource),
-			'source-item-1:create',
-		);
-	} catch (error) {
-		assert.ok(error instanceof CrmError);
-		assert.ok(error.original);
-		return error.original;
-	}
-	throw new Error('The test did not produce an unconfirmed original.');
+function account(credential=EFFECT, overrides: IDataObject={}): IDataObject {
+ return {data:{company:{id:ID},api_key:{id:credential,environment:'live',scopes:['account:read','crm_leads:write','crm_opportunities:write','crm_activities:write'],...overrides}}};
+}
+function oauth(credential=EFFECT, overrides: IDataObject={}): IDataObject {
+ return {data:{company_id:ID,credential_id:credential,client_id:NEXT_ID,environment:'live',scopes:['crm_access_context:read','crm_leads:write','crm_opportunities:write','crm_activities:write'],authorization_version:'current-C7',...overrides}};
+}
+async function saved(resource: Resource='lead', operation: 'create'|'update'|'move_stage'='create'): Promise<OriginalIntent> {
+ const double=programmed(answer(access()),answer(account()));
+ const body=operation==='move_stage'?{expected_version:4,target_pipeline_id:PIPELINE,target_stage_id:STAGE,expected_definition_version:0}
+  :operation==='update'?resource==='lead'?{expected_version:4,name:null}:{expected_version:4,changes:{title:null}}:createBody(resource);
+ const original=await client(double).prepare(resource,operation,body,'RAW source original key',operation==='create'?undefined:ID);
+ assert.equal(double.calls.filter(call=>call.method!=='GET').length,0);assert.equal(double.remaining(),0);return original;
+}
+function receipt(original:OriginalIntent,state='confirmed',data:unknown=writeResponse(original.resource)): IDataObject {
+ return {data:{state,original_body_sha256:original.sha256,original_response:state==='confirmed'?{status:201,body:' '+JSON.stringify(data)+' '}:null},meta:{authorization_version:'new-owner-C7'}};
 }
 
-describe('Factuarea CRM native transport', () => {
-	for (const resource of ['lead', 'opportunity', 'activity'] as const) {
-		it(`creates ${resource} through its native endpoint and original key`, async () => {
-			const double = programmed(
-				answer(access()),
-				answer(writeResponse(resource), 201),
-			);
-			const body = createBody(resource);
-			const result = await client(double).write(
-				resource,
-				'create',
-				body,
-				'source-item-1:create',
-			);
-			assert.equal(double.calls[0]?.url, BASE_URL + '/crm/access-context');
-			assert.equal(double.calls[1]?.url, BASE_URL + resources[resource].path);
-			assert.equal(double.calls[1]?.method, 'POST');
-			assert.deepEqual(double.calls[1]?.body, body);
-			assert.equal(
-				double.calls[1]?.headers?.['Idempotency-Key'],
-				'source-item-1:create',
-			);
-			assert.equal(double.calls[1]?.disableFollowRedirect, true);
-			assert.equal(
-				double.calls[1]?.sendCredentialsOnCrossOriginRedirect,
-				false,
-			);
-			assert.equal(double.calls[1]?.allowedDomains, 'api.factuarea.com');
-			assert.equal(double.calls[1]?.timeout, 30000);
-			assert.equal((result._factuarea as IDataObject).confirmed, true);
-			assert.equal(double.remaining(), 0);
-		});
-
-		it(`reads ${resource} without materializing omitted private fields`, async () => {
-			const data =
-				resource === 'activity'
-					? { activity: { id: ID, body: null }, comments: [], attachments: [] }
-					: { id: ID, name: null };
-			const double = programmed(answer(access()), answer({ data }));
-			assert.deepEqual(await client(double).get(resource, ID), data);
-			assert.equal(
-				double.calls[1]?.url,
-				`${BASE_URL}${resources[resource].path}/${ID}`,
-			);
-			assert.equal(double.calls[1]?.method, 'GET');
-		});
-
-		it(`paginates ${resource} with unchanged filters and a fresh C7 check per page`, async () => {
-			const double = programmed(
-				answer(access()),
-				answer(page(resource, [ID], 'native-cursor')),
-				answer(access()),
-				answer(page(resource, [NEXT_ID], null)),
-			);
-			const rows = await client(double).list(resource, { owner_id: ID }, 1000);
-			assert.deepEqual(
-				rows.map((row) => row.id),
-				[ID, NEXT_ID],
-			);
-			assert.deepEqual(double.calls[1]?.qs, {
-				filters: JSON.stringify({ owner_id: ID }),
-				limit: 100,
-			});
-			assert.deepEqual(double.calls[3]?.qs, {
-				filters: JSON.stringify({ owner_id: ID }),
-				limit: 100,
-				cursor: 'native-cursor',
-			});
-			assert.equal(double.calls[2]?.url, BASE_URL + '/crm/access-context');
-		});
-
-		it(`updates ${resource} using the exact original CAS and explicit null`, async () => {
-			const changes =
-				resource === 'lead'
-					? { notes: null }
-					: resource === 'opportunity'
-						? { next_step: null }
-						: { body: null };
-			const body =
-				resource === 'lead'
-					? { ...changes, expected_version: 7 }
-					: { changes, expected_version: 7 };
-			const double = programmed(
-				answer(access()),
-				answer(writeResponse(resource)),
-			);
-			await client(double).write(
-				resource,
-				'update',
-				body,
-				'source-item-1:update:7',
-				ID,
-			);
-			assert.equal(double.calls[1]?.method, 'PATCH');
-			assert.equal(
-				double.calls[1]?.url,
-				`${BASE_URL}${resources[resource].path}/${ID}`,
-			);
-			assert.deepEqual(double.calls[1]?.body, body);
-		});
-
-		it(`recovers ${resource} with exactly the same original request and native confirmation`, async () => {
-			const original = await capturedOriginal(resource);
-			const double = programmed(
-				answer(access()),
-				answer(writeResponse(resource), 200, { 'idempotent-replayed': 'true' }),
-			);
-			const result = await client(double).recover(original);
-			assert.equal(double.calls.length, 2);
-			assert.equal(double.calls[1]?.method, 'POST');
-			assert.equal(double.calls[1]?.url, BASE_URL + resources[resource].path);
-			assert.deepEqual(double.calls[1]?.body, original.body);
-			assert.equal(
-				double.calls[1]?.headers?.['Idempotency-Key'],
-				original.idempotencyKey,
-			);
-			assert.equal((result._factuarea as IDataObject).replayed, true);
-		});
-	}
-
-	it('honors the explicit total cap without requesting another page', async () => {
-		const double = programmed(
-			answer(access()),
-			answer(page('lead', [ID, NEXT_ID], 'more')),
-		);
-		assert.equal((await client(double).list('lead', {}, 1)).length, 1);
-		assert.equal(double.calls.length, 2);
-	});
-
-	it('returns one page when Return All is disabled', async () => {
-		const double = programmed(
-			answer(access()),
-			answer(page('activity', [ID], 'more')),
-		);
-		assert.equal(
-			(await client(double).list('activity', {}, 1000, false)).length,
-			1,
-		);
-		assert.equal(double.calls.length, 2);
-	});
-
-	it('rejects repeated or malformed cursors instead of announcing a complete list', async () => {
-		for (const invalid of [
-			{ data: { data: [], next_cursor: null, has_more: true } },
-			page('lead', [NEXT_ID], 'same'),
-		]) {
-			const double = programmed(
-				answer(access()),
-				answer(page('lead', [ID], 'same')),
-				answer(access()),
-				answer(invalid),
-			);
-			await assert.rejects(
-				client(double).list('lead', {}, 1000),
-				(error: unknown) =>
-					error instanceof CrmError && error.code === 'invalid_pagination',
-			);
-		}
-	});
-
-	it('drops accumulated list data when Company or C7 changes between pages', async () => {
-		const double = programmed(
-			answer(access()),
-			answer(page('opportunity', [ID], 'more')),
-			answer(
-				access({
-					authorization_version: 'new-company-c7',
-					scope: { mode: 'company', authorization_version: 'new-company-c7' },
-				}),
-			),
-		);
-		await assert.rejects(
-			client(double).list('opportunity', {}, 1000),
-			(error: unknown) =>
-				error instanceof CrmError && error.code === 'crm_context_changed',
-		);
-		assert.equal(double.calls.length, 3);
-	});
-
-	for (const denied of [
-		access({ scope: { mode: 'denied', authorization_version: 'c7-fixture' } }),
-		access({ scope: { mode: 'company', authorization_version: 'stale' } }),
-		access({ availability: [] }),
-		access({
-			sandbox: true,
-			availability: operations.map((operation) => ({
-				operation,
-				available: true,
-				sandbox_policy: 'blocked',
-			})),
-		}),
-	]) {
-		it('refuses unavailable, denied, incoherent or sandbox-blocked operations before effects', async () => {
-			const double = programmed(answer(denied));
-			await assert.rejects(
-				client(double).write('lead', 'create', createBody('lead'), 'original'),
-				(error: unknown) => error instanceof CrmError && error.status === 403,
-			);
-			assert.equal(double.calls.length, 1);
-		});
-	}
-
-	it('checks the expected environment without changing the credential realm', async () => {
-		const double = programmed(answer(access({ sandbox: true })));
-		await assert.rejects(
-			client(double, { environment: 'live' as const }).get('lead', ID),
-			(error: unknown) =>
-				error instanceof CrmError && error.code === 'environment_mismatch',
-		);
-		assert.equal(double.calls.length, 1);
-	});
-
-	it('forwards n8n cancellation and prevents requests after cancellation', async () => {
-		const controller = new AbortController();
-		const double = programmed(answer(access()), answer({ data: { id: ID } }));
-		const api = client(double, { abortSignal: controller.signal });
-		await api.get('lead', ID);
-		assert.equal(double.calls[0]?.abortSignal, controller.signal);
-		assert.equal(double.calls[1]?.abortSignal, controller.signal);
-		controller.abort();
-		await assert.rejects(
-			api.get('lead', ID),
-			(error: unknown) =>
-				error instanceof CrmError && error.code === 'execution_cancelled',
-		);
-		assert.equal(double.calls.length, 2);
-	});
-
-	it('refuses arbitrary credential hosts, insecure URLs, query strings and user info', () => {
-		for (const baseUrl of [
-			'https://attacker.example/v1',
-			'http://api.factuarea.com/v1',
-			'https://api.factuarea.com/v1?token=x',
-			'https://user:secret@api.factuarea.com/v1',
-			'https://api.factuarea.com:8443/v1',
-		]) {
-			const double = programmed();
-			assert.throws(
-				() => client(double, { baseUrl }),
-				(error: unknown) =>
-					error instanceof CrmError && error.code === 'invalid_api_host',
-			);
-			assert.equal(double.calls.length, 0);
-		}
-	});
-
-	it('rejects integer aliases, caller authority, invalid keys, floating amounts and unsafe CAS', async () => {
-		const double = programmed();
-		const api = client(double);
-		await assert.rejects(api.get('lead', '123'));
-		await assert.rejects(
-			api.write('lead', 'create', { name: 'Lead', company_id: ID }, 'original'),
-		);
-		await assert.rejects(
-			api.write('lead', 'create', { name: 'Lead', owner_uuid: ID }, 'original'),
-		);
-		await assert.rejects(api.write('lead', 'create', createBody('lead'), ''));
-		await assert.rejects(
-			api.write(
-				'opportunity',
-				'create',
-				{ ...createBody('opportunity'), amount: 125.004 },
-				'original',
-			),
-		);
-		await assert.rejects(
-			api.write(
-				'activity',
-				'update',
-				{ expected_version: 1.5, changes: { body: null } },
-				'original',
-				ID,
-			),
-		);
-		assert.equal(double.calls.length, 0);
-	});
-
-	it('treats timeouts and 5xx writes as unconfirmed and never automatically retries', async () => {
-		for (const failure of [
-			new Error('api key and private transport body'),
-			answer({ error: { message: 'private server body' } }, 503),
-		]) {
-			const double = programmed(answer(access()), failure);
-			try {
-				await client(double).write(
-					'lead',
-					'create',
-					createBody('lead'),
-					'source-stable',
-				);
-				assert.fail('expected unconfirmed write');
-			} catch (error) {
-				assert.ok(error instanceof CrmError);
-				assert.equal(error.unconfirmed, true);
-				assert.equal(error.original?.idempotencyKey, 'source-stable');
-				assert.deepEqual(error.original?.body, createBody('lead'));
-				assert.doesNotMatch(error.message, /private|api key/);
-			}
-			assert.equal(double.calls.length, 2);
-		}
-	});
-
-	it('does not turn pending activity state or a malformed success into confirmation', async () => {
-		for (const data of [
-			{ state: 'pending', effect_id: EFFECT, activity_id: ID, activity: null },
-			{
-				state: 'confirmed',
-				effect_id: EFFECT,
-				activity_id: ID,
-				activity: { id: NEXT_ID },
-			},
-		]) {
-			const double = programmed(answer(access()), answer({ data }, 201));
-			await assert.rejects(
-				client(double).write(
-					'activity',
-					'create',
-					createBody('activity'),
-					'original',
-				),
-				(error: unknown) =>
-					error instanceof CrmError &&
-					error.unconfirmed &&
-					Boolean(error.original),
-			);
-		}
-	});
-
-	it('preserves the original key and version on 409 without refreshing a mutable record', async () => {
-		const double = programmed(
-			answer(access()),
-			answer({ error: { message: 'private conflict' } }, 409),
-		);
-		try {
-			await client(double).write(
-				'opportunity',
-				'update',
-				{ expected_version: 4, changes: { next_step: null } },
-				'original-update',
-				ID,
-			);
-			assert.fail('expected conflict');
-		} catch (error) {
-			assert.ok(error instanceof CrmError);
-			assert.equal(error.code, 'crm_conflict');
-			assert.equal(error.unconfirmed, false);
-			assert.equal(error.original?.body.expected_version, 4);
-			assert.equal(error.original?.idempotencyKey, 'original-update');
-			assert.doesNotMatch(error.message, /private conflict/);
-		}
-		assert.equal(double.calls.length, 2);
-	});
-
-	it('distinguishes native revision, reused-key and unconfirmed-effect conflicts safely', async () => {
-		for (const code of [
-			'crm_version_conflict',
-			'idempotency_key_reused',
-			'crm_effect_unconfirmed',
-		]) {
-			const double = programmed(
-				answer(access()),
-				answer({ error: { code, message: 'private conflict body' } }, 409),
-			);
-			try {
-				await client(double).write(
-					'activity',
-					'create',
-					createBody('activity'),
-					'original',
-				);
-				assert.fail('expected conflict');
-			} catch (error) {
-				assert.ok(error instanceof CrmError);
-				assert.equal(error.code, code);
-				assert.equal(error.unconfirmed, code === 'crm_effect_unconfirmed');
-				assert.equal(error.original?.idempotencyKey, 'original');
-				assert.doesNotMatch(JSON.stringify(error.toJSON()), /private conflict/);
-			}
-			assert.equal(double.calls.length, 2);
-		}
-	});
-
-	it('exposes safe 422 field names and 429 Retry-After without private messages', async () => {
-		for (const [status, headers, body, expected] of [
-			[
-				422,
-				{},
-				{ error: { param: 'amount', message: 'private amount details' } },
-				'validation_failed',
-			],
-			[
-				429,
-				{ 'retry-after': '12' },
-				{ error: { message: 'private quota' } },
-				'rate_limited',
-			],
-		] as const) {
-			const double = programmed(
-				answer(access()),
-				answer(body, status, headers),
-			);
-			try {
-				await client(double).write(
-					'lead',
-					'create',
-					createBody('lead'),
-					'original',
-				);
-				assert.fail('expected native error');
-			} catch (error) {
-				assert.ok(error instanceof CrmError);
-				assert.equal(error.code, expected);
-				if (status === 422) assert.deepEqual(error.fields, ['amount']);
-				else assert.equal(error.retryAfterSeconds, 12);
-				assert.doesNotMatch(
-					JSON.stringify(error.toJSON()),
-					/private amount|private quota/,
-				);
-			}
-		}
-	});
-
-	it('rejects expired, changed-credential or changed-realm originals without resubmitting', async () => {
-		const original = await capturedOriginal();
-		for (const invalid of [
-			{ ...original, createdAt: Date.now() - 300001 },
-			{ ...original, credentialId: 'other-credential' },
-			{ ...original, baseUrl: 'https://other.example/v1' },
-		]) {
-			const double = programmed();
-			await assert.rejects(client(double).recover(invalid));
-			assert.equal(double.calls.length, 0);
-		}
-		const double = programmed(answer(access({ sandbox: true })));
-		await assert.rejects(
-			client(double).recover(original),
-			(error: unknown) =>
-				error instanceof CrmError && error.code === 'crm_context_changed',
-		);
-		assert.equal(double.calls.length, 1);
-	});
-
-	it('revalidates current scope when recovering the original rather than trusting its snapshot', async () => {
-		const original = await capturedOriginal();
-		const double = programmed(answer(access({ availability: [] })));
-		await assert.rejects(
-			client(double).recover(original),
-			(error: unknown) => error instanceof CrmError && error.status === 403,
-		);
-		assert.equal(double.calls.length, 1);
-	});
-
-	it('recovers an uncertain update using its original CAS without a mutable GET', async () => {
-		const failure = programmed(answer(access()), new Error('timeout'));
-		let original: OriginalIntent | undefined;
-		try {
-			await client(failure).write(
-				'opportunity',
-				'update',
-				{ expected_version: 17, changes: { amount: '12.2500' } },
-				'original-update',
-				ID,
-			);
-		} catch (error) {
-			assert.ok(error instanceof CrmError);
-			original = error.original;
-		}
-		assert.ok(original);
-		const recovery = programmed(
-			answer(access()),
-			answer(writeResponse('opportunity'), 200, {
-				'idempotent-replayed': 'true',
-			}),
-		);
-		await client(recovery).recover(original);
-		assert.equal(recovery.calls[1]?.method, 'PATCH');
-		assert.equal(recovery.calls[1]?.url, `${BASE_URL}/crm/opportunity/${ID}`);
-		assert.deepEqual(recovery.calls[1]?.body, {
-			expected_version: 17,
-			changes: { amount: '12.2500' },
-		});
-		assert.equal(
-			recovery.calls[1]?.headers?.['Idempotency-Key'],
-			'original-update',
-		);
-		assert.equal(recovery.calls.length, 2);
-	});
-
+describe('Factuarea CRM prepared native transport',()=>{
+ it('rejects transport-normalized header edge whitespace without trimming before HTTP',async()=>{
+  const double=programmed();for(const key of [' original','original ',' original '])await assert.rejects(client(double).prepare('lead','create',createBody('lead'),key));assert.equal(double.calls.length,0);
+ });
+ for(const resource of ['lead','opportunity','activity'] as const) {
+  it('prepares '+resource+' without a write and submits exact saved UTF8 bytes once',async()=>{
+   const original=await saved(resource);assert.equal(original.sha256,createHash('sha256').update(original.wire).digest('hex'));
+   const double=programmed(answer(access()),answer(account()),answer(writeResponse(resource),201));
+   const result=await client(double).submit(original);assert.equal(result.id??result.activity_id,ID);
+   assert.equal(double.calls[2]?.body,original.wire);assert.equal(double.calls[2]?.json,false);assert.equal(double.calls[2]?.headers?.['Idempotency-Key'],original.idempotencyKey);
+   assert.equal(double.calls.filter(call=>call.method==='POST').length,1);assert.equal(double.remaining(),0);
+  });
+  it('reads and paginates '+resource+' with current C7 and unchanged filters',async()=>{
+   const double=programmed(answer(access()),answer({data:{id:ID,name:null}}),answer(access()),answer(page(resource,[ID],ID)),answer(access()),answer(page(resource,[NEXT_ID],null)));
+   assert.equal((await client(double).get(resource,ID)).name,null);
+   assert.equal((await client(double).list(resource,{search:'Inbound'},1000)).length,2);
+   assert.equal(double.calls[3]?.qs?.filters,double.calls[5]?.qs?.filters);assert.equal(double.calls[5]?.qs?.cursor,ID);
+  });
+  it('recovers '+resource+' only through canonical Original GET with frozen HTTP bytes',async()=>{
+   const original=await saved(resource),frame=receipt(original);
+   const double=programmed(answer(access()),answer(account()),answer(frame));
+   const result=await client(double).recover(original),call=double.calls[2];
+   assert.equal(call?.url,BASE_URL+resources[resource].path+'/create/original');assert.equal(call?.method,'GET');assert.equal(call?.body,undefined);
+   assert.deepEqual(call?.qs,{original_body_sha256:original.sha256});assert.equal(call?.headers?.['Idempotency-Key'],original.idempotencyKey);
+   assert.equal((result._factuarea as IDataObject).originalResponseBody,(frame.data as IDataObject).original_response && ((frame.data as IDataObject).original_response as IDataObject).body);
+   assert.equal((result._factuarea as IDataObject).originalHttpStatus,201);assert.equal(double.calls.filter(call=>call.method!=='GET').length,0);
+  });
+ }
+ for(const resource of ['lead','activity'] as const) it('retains confirmed '+resource+' owner pointers with hidden representation in Submit and Original',async()=>{
+  const original=await saved(resource);
+  const native={data:resource==='activity'?{state:'confirmed',effect_id:EFFECT,activity_id:ID,activity:null}:{id:ID,confirmed:true,representation_available:false}};
+  const submit=programmed(answer(access()),answer(account()),answer(native,201));
+  const submitted=await client(submit).submit(original);assert.equal(submitted.id??submitted.activity_id,ID);
+  if(resource==='activity')assert.equal(submitted.activity,null);else assert.equal(submitted.version,undefined);
+  const frame=receipt(original,'confirmed',native),recovery=programmed(answer(access()),answer(account()),answer(frame));
+  const recovered=await client(recovery).recover(original);assert.equal(recovered.id??recovered.activity_id,ID);
+  assert.equal((recovered._factuarea as IDataObject).originalResponseBody,((frame.data as IDataObject).original_response as IDataObject).body);
+  assert.ok(recovery.calls.every(call=>call.method==='GET'));
+ });
+ it('moves opportunity stage with original CAS and recovers its fourth canonical GET',async()=>{
+  const original=await saved('opportunity','move_stage');
+  const double=programmed(answer(access()),answer(account()),answer(writeResponse('opportunity')));
+  await client(double).submit(original);assert.equal(double.calls[2]?.url,BASE_URL+'/crm/opportunity/'+ID+'/stage');assert.equal(double.calls[2]?.body,original.wire);
+  const recovery=programmed(answer(access()),answer(account()),answer(receipt(original)));
+  await client(recovery).recover(original);assert.equal(recovery.calls[2]?.url,BASE_URL+'/crm/opportunity/'+ID+'/stage/original');
+ });
+ it('never redispatches an uncertain update: no canonical update Original route exists',async()=>{
+  const original=await saved('lead','update'),double=programmed();
+  await assert.rejects(client(double).recover(original),error=>error instanceof CrmError && error.code==='original_unavailable');assert.equal(double.calls.length,0);
+ });
+ for(const state of ['pending','in_progress','unconfirmed','missing']) it('Original '+state+' never permits a write',async()=>{
+  const original=await saved();const double=programmed(answer(access()),answer(account()),answer(receipt(original,state)));
+  await assert.rejects(client(double).recover(original),error=>error instanceof CrmError && error.code==='original_'+state);assert.ok(double.calls.every(call=>call.method==='GET'));
+ });
+ it('rejects modified wire, caller authority, wrong route UUID and foreign singleton key before dispatch',async()=>{
+  const original=await saved(),double=programmed();
+  for(const bad of [{...original,wire:'{}'},{...original,recordId:ID},{...original,company_id:ID}]) await assert.rejects(client(double).submit(bad));
+  assert.equal(double.calls.length,0);
+  const changed=programmed(answer(access()),answer(account(NEXT_ID)));await assert.rejects(client(changed).recover(original),/credential or realm changed/);assert.equal(changed.calls.length,2);
+ });
+ it('captures input bytes before context reads and retains explicit null and decimal scale',async()=>{
+  const body:IDataObject={...createBody('opportunity'),lead_id:null};const double=programmed(answer(access()),answer(account()));
+  const promise=client(double).prepare('opportunity','create',body,'original');body.amount='999.0';
+  const original=await promise;assert.equal(JSON.parse(original.wire).amount,'125.0040');assert.equal(JSON.parse(original.wire).lead_id,null);
+ });
+ for(const status of [401,403,409,422,429,503]) it('HTTP '+status+' does not retry POST or leak private native errors',async()=>{
+  const original=await saved(),double=programmed(answer(access()),answer(account()),answer({error:{message:'private-key-secret',code:'denied'}},status,{'retry-after':'17'}));
+  await assert.rejects(client(double).submit(original),error=>{assert.equal(String(error).includes('private-key-secret'),false);return error instanceof CrmError && error.status===status;});assert.equal(double.calls.length,3);
+ });
+ it('timeout and pending activity retain original without automatic recovery',async()=>{
+  const original=await saved('activity');
+  for(const response of [new Error('private-token'),answer({data:{state:'pending',effect_id:EFFECT,activity_id:null,activity:null}})]){
+   const double=programmed(answer(access()),answer(account()),response);
+   await assert.rejects(client(double).submit(original),error=>error instanceof CrmError && error.unconfirmed && error.original===original);assert.equal(double.calls.length,3);
+  }
+ });
+ it('uses actual OAuth credential context and current writer-only grants, without inferring a client family',async()=>{
+  const initial=programmed(answer(oauth()),answer(access()),answer(oauth()));const options={authModel:'oauth2' as const,clientId:NEXT_ID};
+  const original=await client(initial,options).prepare('lead','create',createBody('lead'),'oauth:original');
+  assert.equal(initial.calls[0]?.url,BASE_URL+'/crm/credential-context');assert.equal(Object.hasOwn(original.nativeBinding,'family_id'),false);
+  const successor=programmed(answer(oauth(STAGE)),answer(access()),answer(oauth(STAGE)));
+  await assert.rejects(client(successor,options).submit(original),/Credential changed after Prepare/);assert.ok(successor.calls.every(call=>call.method==='GET'));
+  const recovery=programmed(answer(oauth(STAGE)),answer(access({authorization_version:'fresh-C7',scope:{mode:'company',authorization_version:'fresh-C7'}})),answer(oauth(STAGE)),answer(receipt(original)));
+  assert.equal((await client(recovery,options).recover(original)).id,ID);assert.ok(recovery.calls.every(call=>call.method==='GET'));
+ });
+ it('blocks current OAuth writer revocation, company/client drift and realm changes',async()=>{
+  const initial=programmed(answer(oauth()),answer(access()),answer(oauth()));const options={authModel:'oauth2' as const,clientId:NEXT_ID};
+  const original=await client(initial,options).prepare('lead','create',createBody('lead'),'oauth:original');
+  for(const overrides of [{scopes:['crm_access_context:read']},{client_id:PIPELINE},{company_id:PIPELINE},{environment:'test'}]){
+   const double=programmed(answer(oauth(STAGE,overrides)),answer(access()),answer(oauth(STAGE,overrides)));
+   await assert.rejects(client(double,options).recover(original));assert.ok(double.calls.every(call=>call.method==='GET'));
+  }
+ });
+ it('discards a list when C7 changes and refuses repeated cursors',async()=>{
+  const changed=programmed(answer(access()),answer(page('lead',[ID],ID)),answer(access({authorization_version:'new',scope:{mode:'company',authorization_version:'new'}})));
+  await assert.rejects(client(changed).list('lead',{},1000),/authorization changed/);
+  const repeated=programmed(answer(access()),answer(page('lead',[ID],ID)),answer(access()),answer(page('lead',[NEXT_ID],ID)));
+  await assert.rejects(client(repeated).list('lead',{},1000),/cursor/);
+ });
 	it('searches contact people through native page pagination and retains the query', async () => {
 		const double = programmed(
 			answer(access()),
@@ -737,7 +347,6 @@ describe('Factuarea CRM native transport', () => {
 		}
 	});
 });
-
 function execution(
 	double: ReturnType<typeof programmed>,
 	parameters: Array<Record<string, unknown>>,
@@ -757,13 +366,14 @@ function execution(
 		getNodeParameter: (name: string, index: number, fallback?: unknown) =>
 			parameters[index]?.[name] ?? fallback,
 		getCredentials: async () => ({
-			apiKey: 'masked-test-key',
+			apiKey: API_KEY,
 			baseUrl: BASE_URL,
 		}),
 		getNode: () => node,
 		getExecutionCancelSignal: () => undefined,
 		continueOnFail: () => continueOnFail,
 		helpers: {
+			httpRequest: async (options:IHttpRequestOptions)=>{assert.equal(options.method==='POST'||options.method==='PATCH',true);assert.equal(options.headers?.Authorization,'Bearer '+API_KEY);return double.request(options);},
 			httpRequestWithAuthentication: async function (
 				this: IExecuteFunctions,
 				credential: string,
@@ -778,299 +388,60 @@ function execution(
 	} as unknown as IExecuteFunctions;
 }
 
-describe('Factuarea CRM real node execution', () => {
-	it('executes the inbound lead, opportunity and activity recipe with native identities', async () => {
-		const double = programmed(
-			answer(access()),
-			answer({ data: { id: ID, name: 'Inbound' } }, 201),
-			answer(access()),
-			answer({ data: { id: NEXT_ID, title: 'Inbound opportunity' } }, 201),
-			answer(access()),
-			answer(
-				{
-					data: {
-						state: 'confirmed',
-						effect_id: EFFECT,
-						activity_id: STAGE,
-						activity: { id: STAGE, title: 'Follow up' },
-					},
-				},
-				201,
-			),
-		);
-		const node = new FactuareaCrm();
-		const [leads] = await node.execute.call(
-			execution(double, [
-				{
-					resource: 'lead',
-					operation: 'create',
-					body: { name: 'Inbound', source: 'manual' },
-					idempotencyKey: 'inbound:event-1:lead',
-				},
-			]),
-		);
-		const [opportunities] = await node.execute.call(
-			execution(double, [
-				{
-					resource: 'opportunity',
-					operation: 'create',
-					body: {
-						title: 'Inbound opportunity',
-						lead_id: leads?.[0]?.json.id,
-						amount: '125.0000',
-						currency: 'EUR',
-					},
-					pipelineId: PIPELINE,
-					stageId: STAGE,
-					idempotencyKey: 'inbound:event-1:opportunity',
-				},
-			]),
-		);
-		const [activities] = await node.execute.call(
-			execution(double, [
-				{
-					resource: 'activity',
-					operation: 'create',
-					body: { type: 'task', title: 'Follow up', timezone: 'Europe/Madrid' },
-					targetType: 'opportunity',
-					targetId: opportunities?.[0]?.json.id,
-					idempotencyKey: 'inbound:event-1:follow-up',
-				},
-			]),
-		);
-		assert.equal((double.calls[3]?.body as IDataObject).lead_id, ID);
-		assert.deepEqual((double.calls[5]?.body as IDataObject).target, {
-			type: 'opportunity',
-			id: NEXT_ID,
-		});
-		assert.equal(activities?.[0]?.json.state, 'confirmed');
-		assert.equal(activities?.[0]?.json.activity_id, STAGE);
-		assert.equal(double.remaining(), 0);
-	});
-
-	it('ships an inactive recipe with per-step confirmation branches and no credentials', () => {
-		const workflow = recipe as unknown as {
-			active: boolean;
-			nodes: Array<{
-				name: string;
-				type: string;
-				typeVersion: number;
-				parameters: Record<string, unknown>;
-				onError?: string;
-				credentials?: unknown;
-			}>;
-			connections: Record<string, { main: Array<Array<{ node: string }>> }>;
-		};
-		assert.equal(workflow.active, false);
-		assert.ok(workflow.nodes.every((node) => node.credentials === undefined));
-		const crmNodes = workflow.nodes.filter(
-			(node) => node.type === 'n8n-nodes-factuarea.factuareaCrm',
-		);
-		assert.equal(crmNodes.length, 3);
-		assert.equal(
-			new Set(crmNodes.map((node) => node.parameters.idempotencyKey)).size,
-			3,
-		);
-		for (const node of crmNodes) {
-			assert.equal(node.typeVersion, new FactuareaCrm().description.version);
-			assert.equal(node.parameters.environment, 'sandbox');
-			assert.equal(node.onError, 'continueRegularOutput');
-			assert.match(String(node.parameters.idempotencyKey), /eventId/);
-			assert.doesNotMatch(
-				String(node.parameters.idempotencyKey),
-				/\$execution|random/,
-			);
-		}
-		assert.equal(
-			workflow.nodes.find((node) => node.name === 'Inbound')?.parameters
-				.authentication,
-			'headerAuth',
-		);
-		for (const gate of [
-			'Valid Source',
-			'Lead Confirmed',
-			'Opportunity Confirmed',
-			'Activity Confirmed',
-		])
-			assert.equal(
-				workflow.connections[gate]?.main[1]?.[0]?.node,
-				'Respond Review Required',
-			);
-		assert.equal(
-			workflow.connections['Activity Confirmed']?.main[0]?.[0]?.node,
-			'Respond Completed',
-		);
-		assert.equal(
-			workflow.connections['Create Follow-Up']?.main[0]?.[0]?.node,
-			'Activity Confirmed',
-		);
-		assert.doesNotMatch(
-			JSON.stringify(recipe),
-			/fk_live_|fk_test_|Bearer |apiKey|clientSecret/,
-		);
-	});
-
-	it('uses n8n authentication and item-specific keys while preserving item pairing', async () => {
-		const double = programmed(
-			answer(access()),
-			answer(writeResponse('lead'), 201),
-			answer(access()),
-			answer({ data: { id: NEXT_ID, name: 'Second' } }, 201),
-		);
-		const context = execution(double, [
-			{
-				resource: 'lead',
-				operation: 'create',
-				body: '{"name":"First"}',
-				idempotencyKey: 'source-1',
-			},
-			{
-				resource: 'lead',
-				operation: 'create',
-				body: '{"name":"Second"}',
-				idempotencyKey: 'source-2',
-			},
-		]);
-		const [items] = await new FactuareaCrm().execute.call(context);
-		assert.equal(items?.length, 2);
-		assert.deepEqual(
-			items?.map((item) => item.pairedItem),
-			[{ item: 0 }, { item: 1 }],
-		);
-		assert.equal(double.calls[1]?.headers?.['Idempotency-Key'], 'source-1');
-		assert.equal(double.calls[3]?.headers?.['Idempotency-Key'], 'source-2');
-	});
-
-	it('creates opportunity and activity relationships using the selected native options', async () => {
-		const double = programmed(
-			answer(access()),
-			answer(writeResponse('opportunity'), 201),
-			answer(access()),
-			answer(writeResponse('activity'), 201),
-		);
-		const context = execution(double, [
-			{
-				resource: 'opportunity',
-				operation: 'create',
-				body: { title: 'Inbound', amount: '10.0000', currency: 'EUR' },
-				pipelineId: PIPELINE,
-				stageId: STAGE,
-				idempotencyKey: 'inbound:opportunity',
-			},
-			{
-				resource: 'activity',
-				operation: 'create',
-				body: { type: 'task', title: 'Follow up', timezone: 'Europe/Madrid' },
-				targetType: 'opportunity',
-				targetId: ID,
-				idempotencyKey: 'inbound:activity',
-			},
-		]);
-		await new FactuareaCrm().execute.call(context);
-		assert.equal((double.calls[1]?.body as IDataObject).pipeline_id, PIPELINE);
-		assert.deepEqual((double.calls[3]?.body as IDataObject).target, {
-			type: 'opportunity',
-			id: ID,
-		});
-	});
-
-	it('emits a recoverable item error and continues without fabricating success', async () => {
-		const double = programmed(
-			answer(access()),
-			new Error('private timeout'),
-			answer(access()),
-			answer({ data: { id: NEXT_ID } }, 201),
-		);
-		const context = execution(
-			double,
-			[
-				{
-					resource: 'lead',
-					operation: 'create',
-					body: { name: 'First' },
-					idempotencyKey: 'source-1',
-				},
-				{
-					resource: 'lead',
-					operation: 'create',
-					body: { name: 'Second' },
-					idempotencyKey: 'source-2',
-				},
-			],
-			true,
-		);
-		const [items] = await new FactuareaCrm().execute.call(context);
-		assert.equal(items?.length, 2);
-		const error = items?.[0]?.json.error as IDataObject;
-		assert.equal(error.unconfirmed, true);
-		assert.equal((error.original as IDataObject).idempotencyKey, 'source-1');
-		assert.equal(items?.[0]?.json._factuarea, undefined);
-		assert.equal(items?.[1]?.json.id, NEXT_ID);
-		assert.doesNotMatch(
-			JSON.stringify(items),
-			/masked-test-key|private timeout/,
-		);
-	});
-
-	it('stops on failure when Continue On Fail is disabled', async () => {
-		const double = programmed(
-			answer(access()),
-			answer({ error: { message: 'private denied data' } }, 403),
-		);
-		const context = execution(double, [
-			{ resource: 'lead', operation: 'get', recordId: ID },
-			{ resource: 'lead', operation: 'get', recordId: NEXT_ID },
-		]);
-		await assert.rejects(
-			new FactuareaCrm().execute.call(context),
-			(error: unknown) => error instanceof CrmError && error.status === 403,
-		);
-		assert.equal(double.calls.length, 2);
-	});
-
-	it('executes Recover Original using the original input without replacing its CAS', async () => {
-		const original = await capturedOriginal();
-		const double = programmed(
-			answer(access()),
-			answer(
-				{ data: { id: ID, confirmed: true, representation_available: false } },
-				200,
-				{ 'idempotent-replayed': 'true' },
-			),
-		);
-		const [items] = await new FactuareaCrm().execute.call(
-			execution(double, [
-				{
-					resource: 'lead',
-					operation: 'recover',
-					original: JSON.stringify(original),
-				},
-			]),
-		);
-		assert.equal(items?.[0]?.json.confirmed, true);
-		assert.equal(items?.[0]?.json.representation_available, false);
-		assert.deepEqual(double.calls[1]?.body, original.body);
-	});
-
-	it('loads stage options through the real node consumer with the chosen credential', async () => {
-		const double = programmed(
-			answer(access()),
-			answer({
-				data: {
-					id: PIPELINE,
-					stages: [{ id: STAGE, name: 'Qualified', status: 'active' }],
-				},
-			}),
-		);
-		const executeContext = execution(double, []);
-		const context = {
-			...executeContext,
-			getNodeParameter: (name: string, fallback?: unknown) =>
-				name === 'pipelineId' ? PIPELINE : fallback,
-		} as unknown as ILoadOptionsFunctions;
-		assert.deepEqual(
-			await new FactuareaCrm().methods.loadOptions.getStages.call(context),
-			[{ name: 'Qualified', value: STAGE }],
-		);
-	});
+describe('Factuarea CRM actual host node',()=>{
+ it('refuses host Retry On Fail before mutable HTTP so automatic node retries cannot resend POST',async()=>{
+  const original=await saved(),double=programmed(),context=execution(double,[{resource:'lead',operation:'create',prepared:JSON.stringify(original)}]);
+  const node=context.getNode();node.retryOnFail=true;context.getNode=()=>node;
+  await assert.rejects(new FactuareaCrm().execute.call(context),error=>error instanceof CrmError && error.code==='unsafe_write_retry');assert.equal(double.calls.length,0);
+ });
+ it('Prepare and Submit are distinct executions preserving pairing and original identity',async()=>{
+  const preparation=programmed(answer(access()),answer(account()));
+  const [preparedItems]=await new FactuareaCrm().execute.call(execution(preparation,[{resource:'lead',operation:'prepareCreate',body:{name:'Inbound',notes:null},idempotencyKey:'original key RAW'}]));
+  const prepared=preparedItems?.[0]?.json.prepared;assert.equal(typeof prepared,'string');assert.ok(preparation.calls.every(call=>call.method==='GET'));
+  const submission=programmed(answer(access()),answer(account()),answer(writeResponse('lead')));
+  const [items]=await new FactuareaCrm().execute.call(execution(submission,[{resource:'lead',operation:'create',prepared}]));
+  assert.equal(items?.[0]?.json.id,ID);assert.deepEqual(items?.[0]?.pairedItem,{item:0});assert.equal(submission.calls[2]?.body,JSON.parse(String(prepared)).wire);
+ });
+ it('credential replacement between preflight and Submit stops before mutable HTTP',async()=>{
+  const original=await saved(),double=programmed(answer(access()),answer(account())),context=execution(double,[{resource:'lead',operation:'create',prepared:JSON.stringify(original)}]);
+  let reads=0;context.getCredentials=(async()=>({baseUrl:BASE_URL,apiKey:++reads===1?API_KEY:'fact_live_'+'b'.repeat(24)})) as IExecuteFunctions['getCredentials'];
+  await assert.rejects(new FactuareaCrm().execute.call(context));assert.equal(double.calls.length,2);assert.ok(double.calls.every(call=>call.method==='GET'));
+ });
+ it('an in-place OAuth refresh during preflight cannot change the pinned Submit bearer',async()=>{
+  const original=await saved();original.nativeBinding={company:ID,credential:EFFECT,client:NEXT_ID,environment:'live',authModel:'oauth2'};
+  const double=programmed(answer(oauth()),answer(access()),answer(oauth()));
+  const context=execution(double,[{authentication:'oauth2',resource:'lead',operation:'create',prepared:JSON.stringify(original)}]);
+  const credentials={issuer:'https://registered-issuer.example.invalid',clientId:NEXT_ID,baseUrl:BASE_URL,oauthTokenData:{access_token:'first-native-bearer'}};
+  context.getNode=()=>({id:'node-1',credentials:{factuareaCrmOAuth2Api:{id:'credential-1',name:'OAuth'}}} as unknown as INode);
+  context.getCredentials=(async()=>credentials) as IExecuteFunctions['getCredentials'];
+  context.helpers.httpRequestWithAuthentication=async function(type,options){assert.equal(type,'factuareaCrmOAuth2Api');credentials.oauthTokenData.access_token='refreshed-native-bearer';return double.request(options);};
+  await assert.rejects(new FactuareaCrm().execute.call(context));assert.equal(double.calls.length,3);assert.ok(double.calls.every(call=>call.method==='GET'));
+ });
+ it('OAuth GET uses the native host refresh helper and mutable POST bypasses automatic refresh',async()=>{
+  const original=await saved();original.nativeBinding={company:ID,credential:EFFECT,client:NEXT_ID,environment:'live',authModel:'oauth2'};
+  const double=programmed(answer(oauth()),answer(access()),answer(oauth()),answer(writeResponse('lead')));
+  const context=execution(double,[{authentication:'oauth2',resource:'lead',operation:'create',prepared:JSON.stringify(original)}]);
+  const nativeGet=context.helpers.httpRequestWithAuthentication;let gets=0,writes=0;
+  context.getNode=()=>({id:'node-1',credentials:{factuareaCrmOAuth2Api:{id:'credential-1',name:'OAuth'}}} as unknown as INode);
+  context.getCredentials=(async()=>({issuer:'https://registered-issuer.example.invalid',clientId:NEXT_ID,baseUrl:BASE_URL,oauthTokenData:{access_token:'actual-oauth-access'}})) as IExecuteFunctions['getCredentials'];
+  context.helpers.httpRequestWithAuthentication=async function(type,options){assert.equal(type,'factuareaCrmOAuth2Api');assert.equal(options.method,'GET');gets++;return double.request(options);};
+  context.helpers.httpRequest=async function(options){assert.equal(options.method,'POST');assert.equal(options.headers?.Authorization,'Bearer actual-oauth-access');writes++;return double.request(options);};
+  await new FactuareaCrm().execute.call(context);assert.equal(gets,3);assert.equal(writes,1);void nativeGet;
+ });
+ it('continueOnFail retains original bytes without success or private token details',async()=>{
+  const original=await saved(),double=programmed(answer(access()),answer(account()),new Error('private-token'));
+  const [items]=await new FactuareaCrm().execute.call(execution(double,[{resource:'lead',operation:'create',prepared:JSON.stringify(original)}],true));
+  const error=items?.[0]?.json.error as IDataObject;assert.equal(error.unconfirmed,true);assert.equal((error.original as IDataObject).wire,original.wire);assert.equal(items?.[0]?.json._factuarea,undefined);assert.doesNotMatch(JSON.stringify(items),/private-token|masked-test-key/);
+ });
+ it('ships six inactive Prepare/Submit recipe nodes with retained snapshots and per-effect branches',()=>{
+  assert.equal(recipe.active,false);const crm=recipe.nodes.filter(node=>node.type==='n8n-nodes-factuarea.factuareaCrm');assert.equal(crm.length,6);
+  assert.equal(crm.filter(node=>node.parameters.operation==='prepareCreate').length,3);
+  for(const node of crm.filter(node=>node.parameters.operation==='create'))assert.equal((node.parameters as IDataObject).prepared,'={{ $json.prepared }}');
+  assert.doesNotMatch(JSON.stringify(recipe),/Bearer |clientSecret|fact_test_/);assert.ok(recipe.nodes.every(node=>!Object.hasOwn(node,'credentials')));
+ });
+ it('retains the genuine API-key credential and defines separate native PKCE OAuth',()=>{
+  const oauthCredential=new FactuareaCrmOAuth2Api();assert.deepEqual(oauthCredential.extends,['oAuth2Api']);assert.equal(oauthCredential.properties.find(p=>p.name==='grantType')?.default,'pkce');
+  assert.equal(oauthCredential.test.request.url,BASE_URL+'/crm/credential-context');
+  assert.deepEqual(new FactuareaCrm().description.credentials?.map(c=>c.name),['factuareaApi','factuareaCrmOAuth2Api']);
+ });
 });

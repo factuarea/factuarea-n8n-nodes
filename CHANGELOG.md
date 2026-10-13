@@ -11,6 +11,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   selectors and complete pagination
   with explicit caps. Updates preserve exact CAS and every write requires a
   stable original key. Unconfirmed writes support explicit original recovery.
+- Keep Prepare and Submit separate; canonical Original recovery is available only for Lead creation, Opportunity creation/stage change and Activity creation. Updates with uncertain results have no Original route and are never redispatched.
+- Reject unknown authentication selections before credential access or HTTP.
 - Register the CRM action beside the existing trigger without adding runtime
   dependencies or changing trigger behavior. The package gate retains its
   trigger, credential, license, environment and filesystem constraints.
@@ -125,3 +127,5 @@ Four, all measured and all documented in
   hours and never resumes it on its own; the trigger refuses to report a
   suspended destination — or one pointing at an address the instance no longer
   answers on — as being in place, and names the cause instead.
+
+- Add separate native CRM OAuth2 PKCE credential, current credential-context, retained Prepare/Submit and four GET-only Original readers. Preserve exact original HTTP body/status and keep the genuine API-key trigger credential.

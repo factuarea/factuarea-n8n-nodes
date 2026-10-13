@@ -27,22 +27,44 @@ async function client(
 			'Choose a credential environment.',
 			'invalid_environment',
 		);
-	const credentials = await context.getCredentials('factuareaApi');
+	const authentication = 'getInputData' in context ? context.getNodeParameter('authentication', 0, 'apiKey') : context.getNodeParameter('authentication', 'apiKey');
+	if (authentication !== 'apiKey' && authentication !== 'oauth2') throw new CrmError('Choose the original registered authentication type.', 'invalid_authentication');
+	const credentialType = authentication === 'oauth2' ? 'factuareaCrmOAuth2Api' : 'factuareaApi';
+	const credentials = await context.getCredentials(credentialType);
+	const tokenData = credentials.oauthTokenData;
+	const selectedBearer = authentication === 'oauth2'
+		? tokenData && typeof tokenData === 'object' ? object(tokenData).access_token : undefined
+		: credentials.apiKey;
+	if (authentication === 'oauth2') {
+		const issuer = new URL(String(credentials.issuer));
+		if (issuer.protocol !== 'https:' || issuer.origin !== credentials.issuer || issuer.username || issuer.password) throw new CrmError('Choose the actual registered HTTPS OAuth issuer.', 'invalid_credential');
+	}
 	if (typeof credentials.baseUrl !== 'string')
 		throw new CrmError(
 			'Select a Factuarea API credential.',
 			'invalid_credential',
 		);
 	return createCrmClient(
-		(options) =>
-			context.helpers.httpRequestWithAuthentication.call(
+		async (options) => {
+			if (options.method !== 'GET') {
+				const current = await context.getCredentials(credentialType);
+				const actual = authentication === 'oauth2' ? object(current.oauthTokenData).access_token : current.apiKey;
+				if (typeof actual !== 'string' || !actual || actual.length > 8192 || /[\x00-\x20\x7f]/.test(actual) || actual !== selectedBearer) throw new CrmError('Credential changed during Submit. Preserve the original and recover by GET only.', 'credential_changed', 403);
+				if (authentication !== 'oauth2' && !/^fact_(live|test)_[A-Za-z0-9]{24}$/.test(actual)) throw new CrmError('Use the genuine native API key.', 'invalid_credential');
+				// Pin the credential actually observed before preflight; mutable transport never refreshes or replays.
+				return context.helpers.httpRequest({...options, headers: {...options.headers, Authorization: 'Bearer ' + actual}});
+			}
+			return context.helpers.httpRequestWithAuthentication.call(
 				context,
-				'factuareaApi',
+				credentialType,
 				options,
-			),
+			);
+		},
 		{
 			baseUrl: credentials.baseUrl,
-			credentialId: context.getNode().credentials?.factuareaApi?.id ?? '',
+			credentialId: context.getNode().credentials?.[credentialType]?.id ?? '',
+			authModel: authentication === 'oauth2' ? 'oauth2' : 'api_key',
+			clientId: authentication === 'oauth2' ? String(credentials.clientId) : undefined,
 			environment: environment as ClientOptions['environment'],
 			abortSignal:
 				'getExecutionCancelSignal' in context
@@ -63,7 +85,10 @@ export class FactuareaCrm implements INodeType {
 		defaults: { name: 'Factuarea CRM' },
 		inputs: ['main'],
 		outputs: ['main'],
-		credentials: [{ name: 'factuareaApi', required: true }],
+		credentials: [
+			{name: 'factuareaApi', required: true, displayOptions: {show: {authentication: ['apiKey']}}},
+			{name: 'factuareaCrmOAuth2Api', required: true, displayOptions: {show: {authentication: ['oauth2']}}},
+		],
 		properties: crmProperties,
 	};
 
@@ -108,6 +133,7 @@ export class FactuareaCrm implements INodeType {
 			try {
 				const resource = String(this.getNodeParameter('resource', index));
 				const operation = String(this.getNodeParameter('operation', index));
+				if (['create','update','moveStage'].includes(operation) && this.getNode().retryOnFail === true) throw new CrmError('Disable Retry On Fail for Submit. Recover uncertain originals by GET only.', 'unsafe_write_retry');
 				if (resource !== 'contact' && !Object.hasOwn(resources, resource))
 					throw new CrmError(
 						'Choose a native CRM resource.',
@@ -140,6 +166,10 @@ export class FactuareaCrm implements INodeType {
 							'invalid_original',
 						);
 					result = await api.recover(original);
+				} else if (operation === 'create' || operation === 'update' || operation === 'moveStage') {
+					const saved = jsonObject(this.getNodeParameter('prepared', index));
+					if (saved.resource !== resource || saved.operation !== (operation === 'moveStage' ? 'move_stage' : operation)) throw new CrmError('Select the resource and operation from Prepare.', 'invalid_original');
+					result = await api.submit(saved);
 				} else if (operation === 'get')
 					result = await api.get(
 						resource as Resource,
@@ -155,9 +185,9 @@ export class FactuareaCrm implements INodeType {
 						),
 						Boolean(this.getNodeParameter('returnAll', index, true)),
 					);
-				else if (operation === 'create' || operation === 'update') {
+				else if (operation === 'prepareCreate' || operation === 'prepareUpdate' || operation === 'prepareMoveStage') {
 					let body: IDataObject;
-					if (operation === 'update') {
+					if (operation === 'prepareUpdate') {
 						const changes = jsonObject(this.getNodeParameter('changes', index));
 						const version = positiveInteger(
 							this.getNodeParameter('expectedVersion', index),
@@ -168,7 +198,7 @@ export class FactuareaCrm implements INodeType {
 								: { expected_version: version, changes };
 					} else {
 						body = jsonObject(this.getNodeParameter('body', index));
-						if (resource === 'opportunity') {
+						if (resource === 'opportunity' && operation === 'prepareCreate') {
 							body = {
 								...body,
 								pipeline_id: this.getNodeParameter(
@@ -188,15 +218,16 @@ export class FactuareaCrm implements INodeType {
 							};
 						}
 					}
-					result = await api.write(
+					const saved = await api.prepare(
 						resource as Resource,
-						operation,
+						operation === 'prepareMoveStage' ? 'move_stage' : operation === 'prepareUpdate' ? 'update' : 'create',
 						body,
 						String(this.getNodeParameter('idempotencyKey', index)),
-						operation === 'update'
+						operation !== 'prepareCreate'
 							? String(this.getNodeParameter('recordId', index))
 							: undefined,
 					);
+					result = {prepared: JSON.stringify(saved), originalRequestBody: saved.wire, originalBodySha256: saved.sha256, idempotencyKey: saved.idempotencyKey};
 				} else
 					throw new CrmError(
 						'Choose a supported native operation.',

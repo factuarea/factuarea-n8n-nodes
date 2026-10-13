@@ -1,7 +1,7 @@
 import type { IDataObject, IHttpRequestOptions } from 'n8n-workflow';
 
 export type Resource = 'lead' | 'opportunity' | 'activity';
-export type WriteOperation = 'create' | 'update';
+export type WriteOperation = 'create' | 'update' | 'move_stage';
 export type Requester = (options: IHttpRequestOptions) => Promise<unknown>;
 
 export const resources = {
@@ -41,7 +41,7 @@ export const resources = {
 } as const;
 
 export interface OriginalIntent {
-	protocol: 'factuarea-crm-original-v1';
+	protocol: 'factuarea-crm-prepared-v2';
 	resource: Resource;
 	operation: WriteOperation;
 	baseUrl: string;
@@ -52,6 +52,13 @@ export interface OriginalIntent {
 	idempotencyKey: string;
 	recordId?: string;
 	body: IDataObject;
+	wire: string;
+	sha256: string;
+	nativeBinding: CredentialContext;
+}
+
+export interface CredentialContext {
+	company: string; credential: string; client: string | null; environment: 'test' | 'live'; authModel: 'api_key' | 'oauth2';
 }
 
 export interface AccessContext {
@@ -69,6 +76,8 @@ export interface ClientOptions {
 	baseUrl: string;
 	credentialId: string;
 	environment: 'credential' | 'live' | 'sandbox';
+	authModel?: 'api_key' | 'oauth2';
+	clientId?: string;
 	abortSignal?: IHttpRequestOptions['abortSignal'];
 }
 
@@ -148,7 +157,7 @@ export function positiveInteger(
 }
 
 export function originalKey(value: unknown): string {
-	if (typeof value !== 'string' || !/^[\x20-\x7e]{1,255}$/.test(value))
+	if (typeof value !== 'string' || !/^[\x20-\x7e]{1,255}$/.test(value) || value.startsWith(' ') || value.endsWith(' '))
 		throw new CrmError(
 			'Use a stable, non-empty Idempotency-Key of at most 255 printable ASCII characters.',
 			'invalid_idempotency_key',

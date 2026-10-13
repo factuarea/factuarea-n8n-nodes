@@ -1,6 +1,7 @@
 import type { INodeProperties } from 'n8n-workflow';
 
 export const crmProperties: INodeProperties[] = [
+	{displayName: 'Authentication', name: 'authentication', type: 'options', default: 'apiKey', options: [{name: 'API Key', value: 'apiKey'}, {name: 'Native CRM OAuth2', value: 'oauth2'}]},
 	{
 		displayName: 'Resource',
 		name: 'resource',
@@ -21,7 +22,8 @@ export const crmProperties: INodeProperties[] = [
 		default: 'create',
 		displayOptions: { show: { resource: ['lead', 'opportunity', 'activity'] } },
 		options: [
-			{ name: 'Create', value: 'create', action: 'Create a CRM record' },
+			{ name: 'Prepare Create', value: 'prepareCreate', action: 'Prepare an immutable CRM creation' },
+			{ name: 'Submit Prepared Create', value: 'create', action: 'Submit a prepared CRM creation once' },
 			{ name: 'Get', value: 'get', action: 'Get a CRM record' },
 			{ name: 'Get Many', value: 'list', action: 'Get many CRM records' },
 			{
@@ -29,7 +31,10 @@ export const crmProperties: INodeProperties[] = [
 				value: 'recover',
 				action: 'Recover the original CRM write',
 			},
-			{ name: 'Update', value: 'update', action: 'Update a CRM record' },
+			{name: 'Prepare Move Stage (Opportunity)', value: 'prepareMoveStage', action: 'Prepare an Opportunity stage movement'},
+			{name: 'Submit Prepared Move Stage (Opportunity)', value: 'moveStage', action: 'Submit a prepared Opportunity stage movement'},
+			{ name: 'Prepare Update', value: 'prepareUpdate', action: 'Prepare an immutable CRM update' },
+			{ name: 'Submit Prepared Update', value: 'update', action: 'Submit a prepared CRM update once' },
 		],
 	},
 	{
@@ -64,7 +69,7 @@ export const crmProperties: INodeProperties[] = [
 		required: true,
 		displayOptions: {
 			show: {
-				operation: ['get', 'update'],
+				operation: ['get', 'prepareUpdate','prepareMoveStage'],
 				resource: ['lead', 'opportunity', 'activity'],
 			},
 		},
@@ -78,7 +83,7 @@ export const crmProperties: INodeProperties[] = [
 		required: true,
 		displayOptions: {
 			show: {
-				operation: ['create'],
+				operation: ['prepareCreate','prepareMoveStage'],
 				resource: ['lead', 'opportunity', 'activity'],
 			},
 		},
@@ -93,7 +98,7 @@ export const crmProperties: INodeProperties[] = [
 		required: true,
 		typeOptions: { loadOptionsMethod: 'getPipelines' },
 		displayOptions: {
-			show: { operation: ['create'], resource: ['opportunity'] },
+			show: { operation: ['prepareCreate'], resource: ['opportunity'] },
 		},
 		description:
 			'Choose from the current credential context, or provide a public ID using an expression',
@@ -109,7 +114,7 @@ export const crmProperties: INodeProperties[] = [
 			loadOptionsDependsOn: ['pipelineId'],
 		},
 		displayOptions: {
-			show: { operation: ['create'], resource: ['opportunity'] },
+			show: { operation: ['prepareCreate'], resource: ['opportunity'] },
 		},
 		description: 'Stage belonging to the selected pipeline',
 	},
@@ -123,7 +128,7 @@ export const crmProperties: INodeProperties[] = [
 			{ name: 'Opportunity', value: 'opportunity' },
 			{ name: 'Person', value: 'person' },
 		],
-		displayOptions: { show: { operation: ['create'], resource: ['activity'] } },
+		displayOptions: { show: { operation: ['prepareCreate'], resource: ['activity'] } },
 	},
 	{
 		displayName: 'Target Name or ID',
@@ -135,7 +140,7 @@ export const crmProperties: INodeProperties[] = [
 			loadOptionsMethod: 'getTargets',
 			loadOptionsDependsOn: ['targetType'],
 		},
-		displayOptions: { show: { operation: ['create'], resource: ['activity'] } },
+		displayOptions: { show: { operation: ['prepareCreate'], resource: ['activity'] } },
 		description:
 			'Choose an authorized target, or provide a public ID using an expression',
 	},
@@ -147,7 +152,7 @@ export const crmProperties: INodeProperties[] = [
 		required: true,
 		displayOptions: {
 			show: {
-				operation: ['update'],
+				operation: ['prepareUpdate'],
 				resource: ['lead', 'opportunity', 'activity'],
 			},
 		},
@@ -163,7 +168,7 @@ export const crmProperties: INodeProperties[] = [
 		typeOptions: { minValue: 1 },
 		displayOptions: {
 			show: {
-				operation: ['update'],
+				operation: ['prepareUpdate'],
 				resource: ['lead', 'opportunity', 'activity'],
 			},
 		},
@@ -178,13 +183,14 @@ export const crmProperties: INodeProperties[] = [
 		required: true,
 		displayOptions: {
 			show: {
-				operation: ['create', 'update'],
+				operation: ['prepareCreate', 'prepareUpdate','prepareMoveStage'],
 				resource: ['lead', 'opportunity', 'activity'],
 			},
 		},
 		description:
 			'Stable key unique to this source item and operation. Keep it unchanged across retries. Never use a key shared by different items.',
 	},
+	{displayName: 'Prepared Request (JSON)', name: 'prepared', type: 'json', default: '{}', required: true, displayOptions: {show: {operation: ['create', 'update','moveStage']}}, description: 'The saved output from Prepare. The exact bytes and key are sent once. After uncertainty or OAuth renewal use Original GET.'},
 	{
 		displayName: 'Original Request (JSON)',
 		name: 'original',
@@ -198,7 +204,7 @@ export const crmProperties: INodeProperties[] = [
 			},
 		},
 		description:
-			'The complete error.original object from this node. Preserves the original key, body, version, credential and realm. Recovery is limited to five minutes.',
+			'The saved Prepare snapshot or error.original. Queries the canonical Original GET only. Missing or pending never authorizes another write; updates without an Original GET stay unavailable.',
 	},
 	{
 		displayName: 'Filters (JSON)',

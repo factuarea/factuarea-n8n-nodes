@@ -1,0 +1,323 @@
+{
+  "qualification": "Source only; native capability OFF/unratified. No runtime, external App Review or live grants.",
+  "handoff_sha256": "dd1a3f5de3e2cf94b42c61cf6547fb4bc21587fc2fc50e26eb3e2e34d361bb24",
+  "native_source_pins": [
+    {
+      "path": "backend/app/Integration/Infrastructure/Provider/MetaCrmNativeOAuthBatch78/Application/Command/CompleteNativeMetaOAuthCommand/CompleteNativeMetaOAuthCommand.php",
+      "sha256": "676795aa8fbb21dd93bee623a0f3e627b97f3755f60d5228071f0669715b6d63",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/app/Integration/Infrastructure/Provider/MetaCrmNativeOAuthBatch78/Application/Command/CompleteNativeMetaOAuthCommand/CompleteNativeMetaOAuthCommandHandler.php",
+      "sha256": "5de24fd4e86e70c6d16ea70799591989af2debcbdff23c0fdc26935ccc101175",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/app/Integration/Infrastructure/Provider/MetaCrmNativeOAuthBatch78/Application/Command/PrepareNativeMetaOAuthCommand/PrepareNativeMetaOAuthCommand.php",
+      "sha256": "1af0cf44e1945947be918a250957247c6a46dc447e4f64a4502038a0310a9206",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/app/Integration/Infrastructure/Provider/MetaCrmNativeOAuthBatch78/Application/Command/PrepareNativeMetaOAuthCommand/PrepareNativeMetaOAuthCommandHandler.php",
+      "sha256": "6b7bb2a6059415409c5bbb6a2a33ef22ed4158ce6b6090ec9b30efa16b1db23f",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/app/Integration/Infrastructure/Provider/MetaCrmNativeOAuthBatch78/Application/Command/PublishNativeMetaConsentCommand/PublishNativeMetaConsentCommand.php",
+      "sha256": "4c292aa0a37fece04c827715e374be9e2dad70510cc5a898ca98fb0d7af64c81",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/app/Integration/Infrastructure/Provider/MetaCrmNativeOAuthBatch78/Application/Command/PublishNativeMetaConsentCommand/PublishNativeMetaConsentCommandHandler.php",
+      "sha256": "c3d5f2e0ea51cbb6d7cefea57d61143e3254c9da760c06c67f4561960fb10b7b",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/app/Integration/Infrastructure/Provider/MetaCrmNativeOAuthBatch78/Application/Command/PublishNativeMetaMappingCommand/PublishNativeMetaMappingCommand.php",
+      "sha256": "7cc17e56678151fab3c8ccbdce027fe340b39bc9b95c4c932cce3e6b8a459a4b",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/app/Integration/Infrastructure/Provider/MetaCrmNativeOAuthBatch78/Application/Command/PublishNativeMetaMappingCommand/PublishNativeMetaMappingCommandHandler.php",
+      "sha256": "828f7051a1d756586e4d6951147a3b91c50911661b4f4305615cc6a10d9a4314",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/app/Integration/Infrastructure/Provider/MetaCrmNativeOAuthBatch78/Application/Query/GetNativeMetaConnectionOptionsQuery/GetNativeMetaConnectionOptionsQuery.php",
+      "sha256": "f2fe4d81bfb36fc0baf5d818d423596c9e1d2de4c3d27dd96f1247586750f675",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/app/Integration/Infrastructure/Provider/MetaCrmNativeOAuthBatch78/Application/Query/GetNativeMetaConnectionOptionsQuery/GetNativeMetaConnectionOptionsQueryHandler.php",
+      "sha256": "e80859fed9d6e6266f8f5ba27b43682895c881e83ff1a6efb8aa8c8256786f93",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/app/Integration/Infrastructure/Provider/MetaCrmNativeOAuthBatch78/Application/Query/GetNativeMetaMappingQuery/GetNativeMetaMappingQuery.php",
+      "sha256": "801da3d3b785c32d4def9fa3d95230766a22341ad397b628ef3733a83cef37bb",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/app/Integration/Infrastructure/Provider/MetaCrmNativeOAuthBatch78/Application/Query/GetNativeMetaMappingQuery/GetNativeMetaMappingQueryHandler.php",
+      "sha256": "5f211943f426f07433df783c4882c250a37b53dbb71c05a3198be72777e627cc",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/app/Integration/Infrastructure/Provider/MetaCrmNativeOAuthBatch78/Application/Query/InspectNativeMetaMappingQuery/InspectNativeMetaMappingQuery.php",
+      "sha256": "7d86ef030ae6ca5695d0ca78f35282e9099ce684c612ee7012001fd099e0115b",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/app/Integration/Infrastructure/Provider/MetaCrmNativeOAuthBatch78/Application/Query/InspectNativeMetaMappingQuery/InspectNativeMetaMappingQueryHandler.php",
+      "sha256": "e33d2218d9ecd54da82962c2867f935b74eea2cbb90caf38e5148c8677877ea2",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/app/Integration/Infrastructure/Provider/MetaCrmNativeOAuthBatch78/Application/Response/GetNativeMetaConnectionOptionsResponse.php",
+      "sha256": "4e5b580af8c90ad8e396868ec06719314cff3e107cb10b664181f03fc316c124",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/app/Integration/Infrastructure/Provider/MetaCrmNativeOAuthBatch78/Application/Response/GetNativeMetaMappingResponse.php",
+      "sha256": "9701e1ffcc37674e6ed5544ab7fbc383b198b738f36eedc50c5d35edd4eca9e8",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/app/Integration/Infrastructure/Provider/MetaCrmNativeOAuthBatch78/Application/Response/InspectNativeMetaMappingResponse.php",
+      "sha256": "f81c789f8b9bc2f7af8802e551ad779cb9fcd25170d90cd3c3bd5f851224300d",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/app/Integration/Infrastructure/Provider/MetaCrmNativeOAuthBatch78/EloquentNativeMetaOAuthCredentialWriter.php",
+      "sha256": "7153c14d7139fd48a1e9a90b23340183482cee299433b741adb36d8749f03d10",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/app/Integration/Infrastructure/Provider/MetaCrmNativeOAuthBatch78/HTTP_CONTRACT.md",
+      "sha256": "82f6c93a6a16092c3304f6654b2583d25d2cdff6bd4e6814e23c0909a33135e2",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/app/Integration/Infrastructure/Provider/MetaCrmNativeOAuthBatch78/Http/CompleteNativeMetaOAuthController.php",
+      "sha256": "f2ea2d9f73766c50c6554b7477c9bfccf22db1ef0d760a19ffb271870851526d",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/app/Integration/Infrastructure/Provider/MetaCrmNativeOAuthBatch78/Http/CompleteNativeMetaOAuthRequest.php",
+      "sha256": "113eb1078ff04e024345a8470da2c4636d6f5898dd7acd139249100b363e3c7e",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/app/Integration/Infrastructure/Provider/MetaCrmNativeOAuthBatch78/Http/GetNativeMetaConnectionOptionsController.php",
+      "sha256": "53fb018f318e42e78985647e56007b8ef18dc3fa3c3538a4a342d7dd9150c9ed",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/app/Integration/Infrastructure/Provider/MetaCrmNativeOAuthBatch78/Http/GetNativeMetaConnectionOptionsRequest.php",
+      "sha256": "c0f7dc8eca29a9b0e8232247dc50fc4960a2d23e31ecd7f7028a446b8e36fb28",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/app/Integration/Infrastructure/Provider/MetaCrmNativeOAuthBatch78/Http/GetNativeMetaMappingController.php",
+      "sha256": "41a444b16c87ca7132f5c710bd8bb980b56e90f5d26db8df1e4de6aa1d80f9f0",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/app/Integration/Infrastructure/Provider/MetaCrmNativeOAuthBatch78/Http/GetNativeMetaMappingRequest.php",
+      "sha256": "e9d6bcdcf96f29efb647d25f5c6bb6090a423956b711d6a56642976a752a2d99",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/app/Integration/Infrastructure/Provider/MetaCrmNativeOAuthBatch78/Http/InspectNativeMetaMappingController.php",
+      "sha256": "89338987804b946eedda75c7c26a0bcf0742b737ff874803aab6dd5844962143",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/app/Integration/Infrastructure/Provider/MetaCrmNativeOAuthBatch78/Http/InspectNativeMetaMappingRequest.php",
+      "sha256": "5550ac515b4fc84b6130a833f4a76614a872af689eb95c711315119bf1df57bb",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/app/Integration/Infrastructure/Provider/MetaCrmNativeOAuthBatch78/Http/MapsNativeMetaOAuthErrors.php",
+      "sha256": "7f9a4c85180fbe73ee67f238a40b3d88f680aaf075a1cffb59b566f1d8439b72",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/app/Integration/Infrastructure/Provider/MetaCrmNativeOAuthBatch78/Http/PrepareNativeMetaOAuthController.php",
+      "sha256": "eda0ea44aa21b72ca221dfc0af38bdce47b03c840c26b1e9c4b7a65197f618be",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/app/Integration/Infrastructure/Provider/MetaCrmNativeOAuthBatch78/Http/PrepareNativeMetaOAuthRequest.php",
+      "sha256": "a69b763456fe4730cb07c5898cf76fafd7f250aef188881902b54c486ebde88f",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/app/Integration/Infrastructure/Provider/MetaCrmNativeOAuthBatch78/Http/PublishNativeMetaConsentController.php",
+      "sha256": "410cf5b30e17f42f6cef6ff84c226d94df039474013e01d63207fba5afc0260d",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/app/Integration/Infrastructure/Provider/MetaCrmNativeOAuthBatch78/Http/PublishNativeMetaConsentRequest.php",
+      "sha256": "176dfeef5253edf0694d21fba178f8732d94429c63f97bcf6d9c8ea2bbb0749a",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/app/Integration/Infrastructure/Provider/MetaCrmNativeOAuthBatch78/Http/PublishNativeMetaMappingController.php",
+      "sha256": "fd6d3c8aba409398b3a2d74bbaab5b7a4234c15a5852da58e6e0d3fd87484040",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/app/Integration/Infrastructure/Provider/MetaCrmNativeOAuthBatch78/Http/PublishNativeMetaMappingRequest.php",
+      "sha256": "d16bc52b251d68e8f99b41da6c48bc6108995bfdbace56a23550869ab0740ffe",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/app/Integration/Infrastructure/Provider/MetaCrmNativeOAuthBatch78/Http/Routes/spa.php",
+      "sha256": "7320b3719b4152489d94dda1ade3ba91ce3cdad1003ee1aa1738622452344bbc",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/app/Integration/Infrastructure/Provider/MetaCrmNativeOAuthBatch78/Http/Routes/v1.php",
+      "sha256": "fff7878d08a092fee09df41a3cd5b050ea7959a1fbdfd1ed70a73af83aabae8e",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/app/Integration/Infrastructure/Provider/MetaCrmNativeOAuthBatch78/NativeMetaHumanCarrierQualification.php",
+      "sha256": "33468ee14fb8d5ee1f8c292f29a13db54291a3b63c7278d10ca015f9776795d4",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/app/Integration/Infrastructure/Provider/MetaCrmNativeOAuthBatch78/NativeMetaHumanContext.php",
+      "sha256": "fa3b4aba7128097ecbeaaa0e42c4e1675d61a78c86de33fb506c8be95369fb3a",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/app/Integration/Infrastructure/Provider/MetaCrmNativeOAuthBatch78/NativeMetaHumanHandoff.php",
+      "sha256": "98788c8d7f476ebdd552849d88c6df068b7af8e47d5854d4a7ba5a998ccf1aba",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/app/Integration/Infrastructure/Provider/MetaCrmNativeOAuthBatch78/NativeMetaHumanInput.php",
+      "sha256": "4f318f0ce0acd80c11efdf22bb4a6a9af1928f5d35b89e7111be0762a24e37b4",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/app/Integration/Infrastructure/Provider/MetaCrmNativeOAuthBatch78/NativeMetaHumanMetadata.php",
+      "sha256": "94f476a0896673fd38d1b95aebcd7ef2e1df924832d093b9080d179eb99fc45d",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/app/Integration/Infrastructure/Provider/MetaCrmNativeOAuthBatch78/NativeMetaHumanProducer.php",
+      "sha256": "33ef8afa08707c2c4f416246994d07ce0ef86bebeedeb9717658579dae3bac83",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/app/Integration/Infrastructure/Provider/MetaCrmNativeOAuthBatch78/NativeMetaHumanProducerInterface.php",
+      "sha256": "f3e9ada7d6274f918f8a270c244c654c9bd426d4e66866b5d5357aebdfa86137",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/app/Integration/Infrastructure/Provider/MetaCrmNativeOAuthBatch78/NativeMetaHumanSurfaceCatalog.php",
+      "sha256": "0c1eddcffae2636fc45ccb35af2c8efff9bded1a38f789527bdc8218746052f7",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/app/Integration/Infrastructure/Provider/MetaCrmNativeOAuthBatch78/NativeMetaOAuthAuthority.php",
+      "sha256": "1f05cc651d0fc0c1fd746dd45c7490abaaa79ba6ed156508a2d51cf462bb8caa",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/app/Integration/Infrastructure/Provider/MetaCrmNativeOAuthBatch78/NativeMetaOAuthAuthorityInterface.php",
+      "sha256": "cf3b8626363a705d6a911d201571de8074f49ae6ff101f3baad5f6dfcc5f258f",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/app/Integration/Infrastructure/Provider/MetaCrmNativeOAuthBatch78/NativeMetaOAuthConfiguration.php",
+      "sha256": "84ad2d336d1e5e3eab87c53aad078b339d3c8a7695b918ddeb383470fef27fef",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/app/Integration/Infrastructure/Provider/MetaCrmNativeOAuthBatch78/NativeMetaOAuthCredentialWriterInterface.php",
+      "sha256": "1b1e7a0ea9012d78fe35a9f7d169f3d3e5bee1058881f3dcb92cce2781924c9c",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/app/Integration/Infrastructure/Provider/MetaCrmNativeOAuthBatch78/NativeMetaOAuthEnvelope.php",
+      "sha256": "825ca8f85b44b07bd3b16050e2c2ecf60ca5389f431167bdf9de7e8f58891a71",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/app/Integration/Infrastructure/Provider/MetaCrmNativeOAuthBatch78/NativeMetaOAuthHttp.php",
+      "sha256": "ab7721957c90c8bbdc7d65297c01094f6efd79ae93b7ad3be5bf31c9c664ae2b",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/app/Integration/Infrastructure/Provider/MetaCrmNativeOAuthBatch78/NativeMetaOAuthInstallationResponse.php",
+      "sha256": "d7e2acab4a39dd2fea5628ccd65a61ed5ac17ba3b087ce5432ef98908f33a758",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/app/Integration/Infrastructure/Provider/MetaCrmNativeOAuthBatch78/NativeMetaOAuthPageObservation.php",
+      "sha256": "8fab04c06014075be2100b8313ddcbec4f4f8c25b025a70ab37b2b4792ef0037",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/app/Integration/Infrastructure/Provider/MetaCrmNativeOAuthBatch78/NativeMetaOAuthPolicy.php",
+      "sha256": "6e981a2dc868bbacc415d995ec522e1eba310cd0e901f6f6b43a0fca55da6c4a",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/app/Integration/Infrastructure/Provider/MetaCrmNativeOAuthBatch78/NativeMetaOAuthService.php",
+      "sha256": "743be2fbcaf3b2fe3506de3994e5acfa434cdfc830b6145b7bdbf63d3fddbf2d",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/app/Integration/Infrastructure/Provider/MetaCrmNativeOAuthBatch78/NativeMetaOAuthServiceProvider.php",
+      "sha256": "cc04989ccc136dc57b74cc42428f4185429c36301c837b5bf73930e55581b760",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/app/Integration/Infrastructure/Provider/MetaCrmNativeOAuthBatch78/ROOT_ASSEMBLY.md",
+      "sha256": "13e21b3261f38d8b3148e50ac2fc18d64d284999114125aad4bcd38b515b0831",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/tests/Unit/Integration/MetaCrmNativeOAuthBatch78/NativeMetaHumanCarrierQualificationTest.php",
+      "sha256": "a619b7d4b830e0cc4493fb9d67d322339e0f02a1e0e4a465505736876a37921e",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/tests/Unit/Integration/MetaCrmNativeOAuthBatch78/NativeMetaHumanSourceTest.php",
+      "sha256": "75f4f1199c58c443b157612c72267adf4fed704842b2afb26f0d14bb9bebe9af",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/tests/Unit/Integration/MetaCrmNativeOAuthBatch78/NativeMetaOAuthFixture.php",
+      "sha256": "10ce6273b0c883c54b370137d930006e0f777871b59a2606b39bf976b0250b20",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/tests/Unit/Integration/MetaCrmNativeOAuthBatch78/NativeMetaOAuthHttpTest.php",
+      "sha256": "5008ddf1658816c8978f257cbd40a0f78cf85310d458e28a7da91fd89c1e85af",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/tests/Unit/Integration/MetaCrmNativeOAuthBatch78/NativeMetaOAuthServiceTest.php",
+      "sha256": "0af6fb15ff18045f71b58e3ab83441cf04e26d6f72c23172352100bfd82e5178",
+      "mode": "0644"
+    }
+  ],
+  "operation_ids": {
+    "options": "listCrmMetaConnectionOptions",
+    "mapping": "getCrmMetaMapping",
+    "inspect": "inspectCrmMetaMapping",
+    "publishMapping": "publishCrmMetaMapping",
+    "prepareOAuth": "prepareCrmMetaOAuth",
+    "completeOAuth": "completeCrmMetaOAuth",
+    "publishConsent": "publishCrmMetaConsent"
+  },
+  "fine_scope": "crm_connections:write",
+  "oauth_scope": "crm_connections.write",
+  "fixture_provenance": "SYNTHETIC offline unit fixture derived from frozen native HTTP_CONTRACT and NativeMetaOAuthFixture. No official external account, sandbox, App Review or observed grant evidence."
+}

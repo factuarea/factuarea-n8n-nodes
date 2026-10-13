@@ -239,3 +239,7 @@ The same procedure is documented by Factuarea at
 ## License
 
 [MIT](LICENSE)
+
+CRM additionally supports a separate native OAuth2 PKCE credential and retained Prepare/Submit mutations. Recover Original uses only the four canonical GET readers; it never repeats POST/PATCH after uncertainty. See [CRM actions](docs/CRM.md).
+
+The separate **Factuarea WhatsApp** action supports native Prepare, explicit human-approved Send and exact Original GET. See [the human delivery contract](docs/WHATSAPP.md). It uses the genuine API-key credential, preserves existing CRM/OAuth and trigger definitions, and introduces no provider credential or automatic resend.

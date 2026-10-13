@@ -35,7 +35,11 @@
     "LICENSE",
     "README.md",
     "docs/CRM.md",
-    "docs/recipes/web-lead-follow-up.workflow.json"
+    "docs/recipes/web-lead-follow-up.workflow.json",
+    "docs/WHATSAPP.md",
+    "src/nodes/crmMetaNativeBatch80/contract.md",
+    "src/nodes/crmMetaNativeBatch80/recipe.json",
+    "src/nodes/crmMetaNativeBatch80/source-pins.json"
   ],
   "publishConfig": {
     "access": "public",
@@ -44,11 +48,14 @@
   "n8n": {
     "n8nNodesApiVersion": 1,
     "credentials": [
-      "dist/src/credentials/FactuareaApi.credentials.js"
+      "dist/src/credentials/FactuareaApi.credentials.js",
+      "dist/src/credentials/FactuareaCrmOAuth2Api.credentials.js"
     ],
     "nodes": [
       "dist/src/nodes/FactuareaTrigger/FactuareaTrigger.node.js",
-      "dist/src/nodes/FactuareaCrm/FactuareaCrm.node.js"
+      "dist/src/nodes/FactuareaCrm/FactuareaCrm.node.js",
+      "dist/src/nodes/FactuareaWhatsApp/FactuareaWhatsApp.node.js",
+      "dist/src/nodes/crmMetaNativeBatch80/FactuareaMeta.node.js"
     ]
   },
   "scripts": {

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type {
 	IDataObject,
 	IHttpRequestOptions,
@@ -15,13 +16,14 @@ import {
 import type {
 	AccessContext,
 	ClientOptions,
+	CredentialContext,
 	OriginalIntent,
 	Requester,
 	Resource,
 	WriteOperation,
 } from './contract';
 
-const REPLAY_WINDOW_MS = 5 * 60 * 1000;
+
 const LEAD_FIELDS = [
 	'name',
 	'email',
@@ -97,6 +99,13 @@ export function validateBody(
 	operation: WriteOperation,
 	body: IDataObject,
 ): void {
+	if (operation === 'move_stage') {
+		if (resource !== 'opportunity') throw new CrmError('Stage movement belongs to Opportunity.', 'invalid_operation');
+		closed(body, ['expected_version','target_pipeline_id','target_stage_id','expected_definition_version']);
+		positiveInteger(body.expected_version); uuid(body.target_pipeline_id); uuid(body.target_stage_id);
+		if (!Number.isSafeInteger(body.expected_definition_version) || (body.expected_definition_version as number) < 0) throw new CrmError('Use the original definition CAS.', 'invalid_integer');
+		return;
+	}
 	if (operation === 'create') {
 		closed(
 			body,
@@ -206,6 +215,49 @@ export function validateBody(
 	validateIds(body);
 }
 
+function publicId(value: unknown): string {
+	if (typeof value !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)) throw new CrmError('Use a native public UUID.', 'invalid_context');
+	return value;
+}
+function operationFor(resource: Resource, operation: WriteOperation): string {
+	if (operation === 'move_stage') { if (resource !== 'opportunity') throw new CrmError('Stage movement belongs to Opportunity.', 'invalid_operation'); return 'crm_opportunities.move_stage'; }
+	return resources[resource].operations[operation];
+}
+function scopeFor(operation: string): string {
+	const resource = operation.split('.')[0];
+	return resource + ':' + (['create','update','move_stage'].includes(operation.split('.')[1] ?? '') ? 'write' : 'read');
+}
+function prepared(value: unknown): OriginalIntent {
+	const raw = jsonObject(value);
+	closed(raw, ['protocol','resource','operation','baseUrl','credentialId','authorizationVersion','sandbox','createdAt','idempotencyKey','recordId','body','wire','sha256','nativeBinding']);
+	const original = raw as unknown as OriginalIntent;
+	if (typeof original.credentialId !== 'string' || !original.credentialId || typeof original.authorizationVersion !== 'string' || !original.authorizationVersion || typeof original.sandbox !== 'boolean' || typeof original.createdAt !== 'number' || !Number.isSafeInteger(original.createdAt)) throw new CrmError('Invalid original host binding.', 'invalid_original');
+	if (original.protocol !== 'factuarea-crm-prepared-v2' || !Object.hasOwn(resources, original.resource) || !['create','update','move_stage'].includes(original.operation)
+		|| original.baseUrl !== 'https://api.factuarea.com/v1' || typeof original.wire !== 'string' || typeof original.sha256 !== 'string'
+		|| !/^[0-9a-f]{64}$/.test(original.sha256) || createHash('sha256').update(original.wire,'utf8').digest('hex') !== original.sha256
+		|| JSON.stringify(original.body) !== original.wire) throw new CrmError('Preserve the exact prepared request snapshot.', 'invalid_original');
+	originalKey(original.idempotencyKey); validateBody(original.resource, original.operation, object(original.body));
+	const binding = object(original.nativeBinding);
+	closed(binding, ['company','credential','client','environment','authModel']);
+	publicId(binding.company); publicId(binding.credential);
+	if (!['api_key','oauth2'].includes(String(binding.authModel)) || !['test','live'].includes(String(binding.environment))
+		|| binding.authModel === 'oauth2' && !binding.client || binding.authModel === 'api_key' && binding.client !== null) throw new CrmError('Invalid original credential binding.', 'invalid_original');
+	if (binding.client !== null) publicId(binding.client);
+	if ((binding.environment === 'test') !== original.sandbox) throw new CrmError('Invalid original realm.', 'invalid_original');
+	if (original.operation !== 'create') uuid(original.recordId); else if (original.recordId !== undefined) throw new CrmError('A creation cannot carry a record route.', 'invalid_original');
+	return original;
+}
+function confirmed(original: OriginalIntent, data: IDataObject): IDataObject {
+	try {
+		if (original.resource === 'activity') {
+			if (data.state !== 'confirmed') throw new Error('Unconfirmed state');
+			uuid(data.activity_id); uuid(data.effect_id);
+			if (data.activity !== null && object(data.activity).id !== data.activity_id) throw new Error('Identity mismatch');
+		} else { uuid(data.id); if (data.state !== undefined && data.state !== 'confirmed' || data.confirmed === false || data.representation_available === false && data.confirmed !== true) throw new Error('Unconfirmed identity'); if (original.operation === 'move_stage' && data.id !== original.recordId) throw new Error('Identity mismatch'); if (data.confirmed !== undefined && data.confirmed !== true) throw new Error('Unconfirmed identity'); }
+	} catch { throw new CrmError('The native response did not confirm the original effect. Use Original GET without another write.', 'unconfirmed_write', undefined, true, original); }
+	return data;
+}
+
 export function createCrmClient(request: Requester, options: ClientOptions) {
 	let parsed: URL;
 	try {
@@ -258,10 +310,12 @@ export function createCrmClient(request: Requester, options: ClientOptions) {
 			headers: { Accept: 'application/json' },
 		};
 		if (original) {
-			wire.body = original.body;
+			if (method !== 'GET') wire.body = original.wire;
+			wire.json = false;
 			wire.headers = {
 				...wire.headers,
 				'Idempotency-Key': original.idempotencyKey,
+				...(method !== 'GET' ? {'Content-Type': 'application/json'} : {}),
 			};
 		}
 		let response: IDataObject;
@@ -334,7 +388,7 @@ export function createCrmClient(request: Requester, options: ClientOptions) {
 					'validation_failed',
 				],
 				429: [
-					'Factuarea rate-limited this request. Wait for Retry-After before retrying the same intent.',
+					'Factuarea rate-limited this request. Wait for Retry-After, then recover the saved original by GET only.',
 					'rate_limited',
 				],
 			};
@@ -398,7 +452,7 @@ export function createCrmClient(request: Requester, options: ClientOptions) {
 		}
 		try {
 			return {
-				body: object(response.body),
+				body: object(typeof response.body === 'string' ? JSON.parse(response.body) : response.body),
 				headers: response.headers ? object(response.headers) : {},
 			};
 		} catch {
@@ -412,10 +466,39 @@ export function createCrmClient(request: Requester, options: ClientOptions) {
 		}
 	}
 
+	async function credential(requiredScope: string, expected?: CredentialContext): Promise<CredentialContext> {
+		const oauth = options.authModel === 'oauth2';
+		const {body} = await send(oauth ? '/crm/credential-context' : '/account');
+		const data = object(body.data);
+		let current: CredentialContext;
+		let scopes: unknown;
+		if (oauth) {
+			closed(data, ['company_id','credential_id','client_id','environment','scopes','authorization_version']);
+			if (Object.keys(data).length !== 6 || typeof data.authorization_version !== 'string' || !data.authorization_version)
+				throw new CrmError('The native OAuth context is invalid.', 'invalid_context');
+			current = {company: publicId(data.company_id), credential: publicId(data.credential_id), client: publicId(data.client_id), environment: data.environment as 'test'|'live', authModel: 'oauth2'};
+			if (current.client !== options.clientId) throw new CrmError('The OAuth client binding changed.', 'credential_changed', 403);
+			scopes = data.scopes;
+		} else {
+			const key = object(data.api_key);
+			current = {company: publicId(object(data.company).id), credential: publicId(key.id), client: null, environment: key.environment as 'test'|'live', authModel: 'api_key'};
+			scopes = key.scopes;
+		}
+		if (!['test','live'].includes(current.environment) || !Array.isArray(scopes) || scopes.some(scope => typeof scope !== 'string'))
+			throw new CrmError('The native credential context is invalid.', 'invalid_context');
+		for (const scope of [oauth ? 'crm_access_context:read' : 'account:read', requiredScope])
+			if (!scopes.includes('*') && !scopes.includes(scope)) throw new CrmError('The current native scope is unavailable.', 'insufficient_scope', 403);
+		if (expected && (expected.company !== current.company || expected.environment !== current.environment || expected.authModel !== current.authModel
+			|| expected.client !== current.client || current.authModel === 'api_key' && expected.credential !== current.credential))
+			throw new CrmError('The original credential or realm changed.', 'credential_changed', 403);
+		return current;
+	}
+
 	async function access(
 		operation: string,
 		expected?: { version: string; sandbox: boolean },
 	): Promise<AccessContext> {
+		if (options.authModel === 'oauth2') await credential(scopeFor(operation));
 		const { body } = await send('/crm/access-context');
 		let context: AccessContext;
 		try {
@@ -624,19 +707,22 @@ export function createCrmClient(request: Requester, options: ClientOptions) {
 			);
 		},
 		contacts,
-		async write(
+		async prepare(
 			resource: Resource,
 			operation: WriteOperation,
 			body: IDataObject,
 			key: string,
 			id?: string,
-		): Promise<IDataObject> {
+		): Promise<OriginalIntent> {
 			validateBody(resource, operation, body);
 			originalKey(key);
-			if (operation === 'update') uuid(id);
-			const context = await access(resources[resource].operations[operation]);
+			if (operation !== 'create') uuid(id);
+			const wire = JSON.stringify(body);
+			const context = await access(operationFor(resource, operation));
+			const nativeBinding = await credential(scopeFor(operationFor(resource, operation)));
+			if ((nativeBinding.environment === 'test') !== context.sandbox) throw new CrmError('The native credential realm changed.', 'environment_mismatch', 403);
 			const original: OriginalIntent = {
-				protocol: 'factuarea-crm-original-v1',
+				protocol: 'factuarea-crm-prepared-v2',
 				resource,
 				operation,
 				baseUrl,
@@ -646,66 +732,40 @@ export function createCrmClient(request: Requester, options: ClientOptions) {
 				createdAt: Date.now(),
 				idempotencyKey: key,
 				...(id ? { recordId: id } : {}),
-				body: JSON.parse(JSON.stringify(body)) as IDataObject,
+				body: JSON.parse(wire) as IDataObject, wire, sha256: createHash('sha256').update(wire, 'utf8').digest('hex'), nativeBinding,
 			};
+			return original;
+		},
+		async submit(value: unknown): Promise<IDataObject> {
+			const original = prepared(value);
+			if (original.credentialId !== options.credentialId) throw new CrmError('The saved n8n credential changed.', 'credential_changed', 403);
+			const context = await access(operationFor(original.resource, original.operation));
+			if (context.sandbox !== original.sandbox) throw new CrmError('The original realm changed.', 'environment_mismatch', 403);
+			const current = await credential(scopeFor(operationFor(original.resource, original.operation)), original.nativeBinding);
+			if (current.credential !== original.nativeBinding.credential) throw new CrmError('Credential changed after Prepare. Recover the saved original by GET only.', 'credential_changed', 403);
 			return dispatch(original);
 		},
 		async recover(value: unknown): Promise<IDataObject> {
-			const raw = jsonObject(value);
-			closed(raw, [
-				'protocol',
-				'resource',
-				'operation',
-				'baseUrl',
-				'credentialId',
-				'authorizationVersion',
-				'sandbox',
-				'createdAt',
-				'idempotencyKey',
-				'recordId',
-				'body',
-			]);
-			const original = raw as unknown as OriginalIntent;
-			if (
-				original.protocol !== 'factuarea-crm-original-v1' ||
-				!Object.hasOwn(resources, original.resource) ||
-				!['create', 'update'].includes(original.operation) ||
-				original.baseUrl !== baseUrl ||
-				!options.credentialId ||
-				original.credentialId !== options.credentialId ||
-				typeof original.authorizationVersion !== 'string' ||
-				typeof original.sandbox !== 'boolean'
-			)
-				throw new CrmError(
-					'The original request belongs to a different credential or native contract.',
-					'invalid_original',
-				);
-			if (
-				!Number.isSafeInteger(original.createdAt) ||
-				Date.now() < original.createdAt ||
-				Date.now() - original.createdAt > REPLAY_WINDOW_MS
-			)
-				throw new CrmError(
-					'The original recovery window has expired. Investigate the native outcome before submitting any replacement intent.',
-					'original_expired',
-				);
-			originalKey(original.idempotencyKey);
-			validateBody(
-				original.resource,
-				original.operation,
-				object(original.body),
-			);
-			if (original.operation === 'update') uuid(original.recordId);
-			else if (original.recordId !== undefined)
-				throw new CrmError(
-					'Creation originals cannot carry a record route.',
-					'invalid_original',
-				);
-			await access(
-				resources[original.resource].operations[original.operation],
-				{ version: original.authorizationVersion, sandbox: original.sandbox },
-			);
-			return dispatch(original);
+			const original = prepared(value);
+			if (original.credentialId !== options.credentialId) throw new CrmError('The saved n8n credential changed.', 'credential_changed', 403);
+			if (original.operation === 'update') throw new CrmError('This update has no canonical Original GET route. Preserve the original for native review; do not redispatch PATCH.', 'original_unavailable');
+			const context = await access(operationFor(original.resource, original.operation));
+			if (context.sandbox !== original.sandbox) throw new CrmError('The original realm changed.', 'environment_mismatch', 403);
+			await credential(scopeFor(operationFor(original.resource, original.operation)), original.nativeBinding);
+			const {body} = await send(resources[original.resource].path + (original.operation === 'move_stage' ? '/' + original.recordId + '/stage/original' : '/create/original'), 'GET', {original_body_sha256: original.sha256}, original);
+			const meta = object(body.meta), receipt = object(body.data);
+			closed(receipt, ['state','original_body_sha256','original_response']);
+			if (typeof meta.authorization_version !== 'string' || !meta.authorization_version || receipt.original_body_sha256 !== original.sha256
+				|| !['confirmed','pending','in_progress','unconfirmed','missing'].includes(String(receipt.state))) throw new CrmError('The original receipt is invalid.', 'invalid_original');
+			if (receipt.state !== 'confirmed') throw new CrmError('The original effect is not confirmed. This state never authorizes another POST.', 'original_' + String(receipt.state), undefined, true, original);
+			const response = object(receipt.original_response);
+			if (!Number.isSafeInteger(response.status) || (response.status as number) < 200 || (response.status as number) >= 300 || typeof response.body !== 'string')
+				throw new CrmError('The original HTTP response is invalid.', 'invalid_original');
+			let frozen: IDataObject;
+			try { frozen = object(JSON.parse(response.body)); } catch { throw new CrmError('The original response body is invalid.', 'invalid_original'); }
+			const result = confirmed(original, object(frozen.data));
+			return {...result, _factuarea: {confirmed: true, recovered: true, idempotencyKey: original.idempotencyKey,
+				originalHttpStatus: response.status, originalResponseBody: response.body, originalBodySha256: original.sha256, authorizationVersion: meta.authorization_version}};
 		},
 		async options(
 			kind: 'pipelines' | 'stages' | 'leads' | 'people' | 'opportunities',
@@ -756,38 +816,12 @@ export function createCrmClient(request: Requester, options: ClientOptions) {
 	async function dispatch(original: OriginalIntent): Promise<IDataObject> {
 		const { body, headers } = await send(
 			resources[original.resource].path +
-				(original.operation === 'update' ? `/${original.recordId}` : ''),
-			original.operation === 'create' ? 'POST' : 'PATCH',
+				(original.operation === 'move_stage' ? `/${original.recordId}/stage` : original.operation === 'update' ? `/${original.recordId}` : ''),
+			original.operation === 'update' ? 'PATCH' : 'POST',
 			undefined,
 			original,
 		);
-		let data: IDataObject;
-		try {
-			data = object(body.data);
-			if (original.resource === 'activity') {
-				if (data.state !== 'confirmed')
-					throw new Error('Unconfirmed native state.');
-				uuid(data.activity_id);
-				uuid(data.effect_id);
-				if (
-					data.activity !== null &&
-					object(data.activity).id !== data.activity_id
-				)
-					throw new Error('Invalid native identity.');
-			} else {
-				uuid(data.id);
-				if (data.confirmed !== undefined && data.confirmed !== true)
-					throw new Error('Unconfirmed native identity.');
-			}
-		} catch {
-			throw new CrmError(
-				'The write response did not confirm a public record identity. Recover the original request.',
-				'unconfirmed_write',
-				undefined,
-				true,
-				original,
-			);
-		}
+		const data = confirmed(original, object(body.data));
 		return {
 			...data,
 			_factuarea: {

@@ -32,6 +32,7 @@ after(() => fs.rmSync(WORKSPACE, { recursive: true, force: true }));
 
 const NODE_PATH = 'dist/src/nodes/FactuareaTrigger/FactuareaTrigger.node.js';
 const CRM_NODE_PATH = 'dist/src/nodes/FactuareaCrm/FactuareaCrm.node.js';
+const WHATSAPP_NODE_PATH = 'dist/src/nodes/FactuareaWhatsApp/FactuareaWhatsApp.node.js';
 const CREDENTIAL_PATH = 'dist/src/credentials/FactuareaApi.credentials.js';
 
 const MIT_LICENCE = `MIT License
@@ -207,7 +208,7 @@ describe('check-package-constraints', () => {
 
 		assert.equal(status, 1, `the gate accepted a second node:\n${output}`);
 		assert.match(output, /Factuarea\.node\.js/);
-		assert.match(output, /only the registered Factuarea trigger and CRM action/);
+		assert.match(output, /only the registered Factuarea trigger, CRM action and native WhatsApp action/);
 	});
 
 	it('accepts the registered native CRM action alongside the unchanged trigger', () => {
@@ -229,14 +230,35 @@ describe('check-package-constraints', () => {
 		assert.match(output, /execute method and existing Factuarea API credential/);
 	});
 
-	it('rejects a third node even when the CRM action is registered', () => {
+	it('rejects a duplicate CRM node in the WhatsApp slot', () => {
 		const root = artefact('third-node', (manifest, files) => {
 			manifest.n8n.nodes.push(CRM_NODE_PATH, CRM_NODE_PATH);
 			files[CRM_NODE_PATH] = "class FactuareaCrm { description = { name: 'factuareaCrm', group: ['transform'], credentials: [{ name: 'factuareaApi' }] }; async execute() { return [[]]; } }";
 		});
 		const { status, output } = runGate(root);
 		assert.equal(status, 1, output);
-		assert.match(output, /only the registered Factuarea trigger and CRM action/);
+		assert.match(output, /only the registered Factuarea trigger, CRM action and native WhatsApp action/);
+	});
+
+	it('accepts only the registered native WhatsApp action after the trigger and CRM action', () => {
+		const root = artefact('whatsapp-action', (manifest, files) => {
+			manifest.n8n.nodes.push(CRM_NODE_PATH, WHATSAPP_NODE_PATH);
+			files[CRM_NODE_PATH] = "class FactuareaCrm { description = { name: 'factuareaCrm', group: ['transform'], credentials: [{ name: 'factuareaApi' }] }; async execute() { return [[]]; } }";
+			files[WHATSAPP_NODE_PATH] = "class FactuareaWhatsApp { description = { name: 'factuareaWhatsApp', group: ['transform'], credentials: [{ name: 'factuareaApi' }] }; async execute() { return [[]]; } }";
+		});
+		const { status, output } = runGate(root);
+		assert.equal(status, 0, output);
+	});
+
+	it('rejects a WhatsApp action without its execution or genuine API-key credential', () => {
+		const root = artefact('invalid-whatsapp-action', (manifest, files) => {
+			manifest.n8n.nodes.push(CRM_NODE_PATH, WHATSAPP_NODE_PATH);
+			files[CRM_NODE_PATH] = "class FactuareaCrm { description = { name: 'factuareaCrm', group: ['transform'], credentials: [{ name: 'factuareaApi' }] }; async execute() { return [[]]; } }";
+			files[WHATSAPP_NODE_PATH] = "class FactuareaWhatsApp { description = { name: 'factuareaWhatsApp', group: ['transform'], credentials: [{ name: 'factuareaCrmOAuth2Api' }] }; }";
+		});
+		const { status, output } = runGate(root);
+		assert.equal(status, 1, output);
+		assert.match(output, /execute method and genuine API-key credential/);
 	});
 
 	it('rejects an import of the file system and names the file and the line', () => {
@@ -323,3 +345,9 @@ describe('check-package-constraints', () => {
 		assert.match(output, /process\.env/);
 	});
 });
+
+const META_NODE_PATH = 'dist/src/nodes/crmMetaNativeBatch80/FactuareaMeta.node.js';
+function metaArtefact(name, source, pathOverride = META_NODE_PATH) { return artefact(name, (manifest, files) => {manifest.n8n.nodes.push(CRM_NODE_PATH, WHATSAPP_NODE_PATH, pathOverride);files[CRM_NODE_PATH]="class FactuareaCrm { description = {name:'factuareaCrm',group:['transform'],credentials:[{name:'factuareaApi'}]}; async execute(){} }";files[WHATSAPP_NODE_PATH]="class FactuareaWhatsApp {description={name:'factuareaWhatsApp',group:['transform'],credentials:[{name:'factuareaApi'}]};async execute(){} }";files[pathOverride]=source;}); }
+it('Meta package gate admits only its actual fourth native transform with genuine credentials',()=>{const {status,output}=runGate(metaArtefact('meta-fourth',"class FactuareaMeta {description={name:'factuareaMeta',group:['transform'],credentials:[{name:'factuareaApi'},{name:'factuareaCrmOAuth2Api'}]};async execute(){} }"));assert.equal(status,0,output);});
+it('Meta package gate rejects a synthetic fourth path and names it',()=>{const {status,output}=runGate(metaArtefact('meta-foreign',"class FactuareaMeta {}",'dist/src/nodes/Invented.node.js'));assert.equal(status,1,output);assert.match(output,/Invented/);});
+it('Meta package gate rejects a fake transform without the original OAuth/API-key credentials',()=>{const {status,output}=runGate(metaArtefact('meta-no-original-auth',"class FactuareaMeta {description={name:'factuareaMeta',group:['transform']};async execute(){} }"));assert.equal(status,1,output);assert.match(output,/original API-key\/OAuth credentials/);});

@@ -1,0 +1,64 @@
+{
+  "platform": "n8n",
+  "version": 1,
+  "enabled": false,
+  "qualification": "Offline human review recipe. No host execution or publishing. App Review unavailable; consent must deny.",
+  "steps": [
+    {
+      "operation": "options",
+      "registered_key": "factuareaMeta",
+      "node_operation": "options",
+      "inputs": "Map original chosen native output only; no fixture defaults or secrets",
+      "human_confirmation_required": false,
+      "confirmed": false
+    },
+    {
+      "operation": "prepareOAuth",
+      "registered_key": "factuareaMeta",
+      "node_operation": "prepareOAuth",
+      "inputs": "Map original chosen native output only; no fixture defaults or secrets",
+      "human_confirmation_required": true,
+      "confirmed": false
+    },
+    {
+      "operation": "completeOAuth",
+      "registered_key": "factuareaMeta",
+      "node_operation": "completeOAuth",
+      "inputs": "Map original chosen native output only; no fixture defaults or secrets",
+      "human_confirmation_required": false,
+      "confirmed": false
+    },
+    {
+      "operation": "inspect",
+      "registered_key": "factuareaMeta",
+      "node_operation": "inspect",
+      "inputs": "Map original chosen native output only; no fixture defaults or secrets",
+      "human_confirmation_required": false,
+      "confirmed": false
+    },
+    {
+      "operation": "publishMapping",
+      "registered_key": "factuareaMeta",
+      "node_operation": "publishMapping",
+      "inputs": "Map original chosen native output only; no fixture defaults or secrets",
+      "human_confirmation_required": true,
+      "confirmed": false
+    },
+    {
+      "operation": "mapping",
+      "registered_key": "factuareaMeta",
+      "node_operation": "mapping",
+      "inputs": "Map original chosen native output only; no fixture defaults or secrets",
+      "human_confirmation_required": false,
+      "confirmed": false
+    },
+    {
+      "operation": "publishConsent",
+      "registered_key": "factuareaMeta",
+      "node_operation": "publishConsent",
+      "inputs": "Map original chosen native output only; no fixture defaults or secrets",
+      "human_confirmation_required": true,
+      "confirmed": false
+    }
+  ]
+}

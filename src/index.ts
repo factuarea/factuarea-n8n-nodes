@@ -18,8 +18,8 @@
  *
  * The registered classes are re-exported by name. A star re-export would silently widen
  * the package's public surface with whatever a module happens to export next,
- * and the surface here contains a trigger, a CRM action and one credential
- * type. That is also what the manifest declares and what the
+ * and the surface here contains the genuine trigger, CRM and WhatsApp actions,
+ * plus the API-key and separate CRM OAuth credential types. That is also what the manifest declares and what the
  * package gate checks, so anything else appearing here would make the two
  * disagree.
  */
@@ -27,3 +27,8 @@
 export { FactuareaTrigger } from './nodes/FactuareaTrigger/FactuareaTrigger.node';
 export { FactuareaApi } from './credentials/FactuareaApi.credentials';
 export { FactuareaCrm } from './nodes/FactuareaCrm/FactuareaCrm.node';
+
+export { FactuareaCrmOAuth2Api } from './credentials/FactuareaCrmOAuth2Api.credentials';
+export { FactuareaWhatsApp } from './nodes/FactuareaWhatsApp/FactuareaWhatsApp.node';
+
+export {FactuareaMeta} from './nodes/crmMetaNativeBatch80/FactuareaMeta.node';
