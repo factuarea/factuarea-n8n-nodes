@@ -46,10 +46,31 @@
  *
  * ## Response envelopes, measured
  *
- *   `POST /v1/webhook_endpoints`         201 `{ data: { …, secret } }`
- *   `GET  /v1/webhook_endpoints/{id}`    200 `{ data: { … } }`, 404 when gone
- *   `DELETE /v1/webhook_endpoints/{id}`  204 no content
- *   `GET  /v1/event-catalog`             200 `{ data: [ { name, category, description, status } ] }`
+ *   `POST   /v1/companies/{company}/webhook-endpoints`
+ *       201 `{ data: { …, secret } }`
+ *   `GET    /v1/companies/{company}/webhook-endpoints/{webhook_endpoint}`
+ *       200 `{ data: { … } }`, 404 when gone or when it belongs elsewhere
+ *   `DELETE /v1/companies/{company}/webhook-endpoints/{webhook_endpoint}`
+ *       204 no content
+ *   `GET    /v1/event-catalog`
+ *       200 `{ data: [ { name, category, description, status } ] }`
+ *
+ * ## The company is a PATH SEGMENT on three of the four, and on none of them by
+ * ## search-and-replace
+ *
+ * The three webhook-endpoint routes carry the company that owns the destination
+ * in their path, written `companies/{company}` and followed by a resource
+ * spelled with a HYPHEN (`webhook-endpoints`, not `webhook_endpoints`). The
+ * underscore survives only in the route NAME on the server, which is not a URL
+ * and appears nowhere here.
+ *
+ * The fourth route, the event catalogue, hangs from the ROOT of the version and
+ * takes no company at all. That asymmetry is the whole reason this file builds
+ * each URL where it is used instead of prefixing a common root: a re-anchoring
+ * that searched for the version segment and pushed a company in front of
+ * everything it found would break the catalogue — in the opposite direction to
+ * the one it was trying to fix — and there would be nothing in a diff to show
+ * it.
  *
  * The `data` envelope is required, not guessed: reading a response that lacks it
  * as if it were the resource would hand the rest of the node an object with no
@@ -60,14 +81,25 @@
 import { randomUUID } from 'node:crypto';
 
 import {
+	ERROR_ACCOUNT_CAPABILITY_REQUIRED,
+	ERROR_ACCOUNT_ENDPOINT_CREATOR_LOST_CAPABILITY,
+	ERROR_ACCOUNT_ENDPOINT_LIMIT_REACHED,
+	ERROR_ACCOUNT_NOT_SELECTED,
+	ERROR_ACCOUNT_WEBHOOKS_ADDON_REQUIRED,
+	ERROR_ACCOUNT_NOT_FOUND,
 	ERROR_ENDPOINT_GONE,
 	ERROR_ENDPOINT_LIMIT_REACHED,
+	ERROR_ENDPOINT_NOT_ACTIVE,
 	ERROR_ENDPOINT_URL_NOT_ACCEPTED,
 	ERROR_EVENT_CATALOG_UNAVAILABLE,
 	ERROR_INSUFFICIENT_SCOPE,
+	ERROR_LIVE_CREDENTIAL_REQUIRED,
 	ERROR_NO_EVENTS_SELECTED,
 } from '../errors';
 import type {
+	AccountWebhookEndpointV1,
+	AccountWebhookEndpointWithSecretV1,
+	CreateAccountWebhookEndpointBody,
 	CreateWebhookEndpointInput,
 	EventCatalogEntryV1,
 	FactuareaApiClient,
@@ -89,6 +121,43 @@ const CODE_MAX_ENDPOINTS = 'max_webhook_endpoints_exceeded';
 
 /** Subcode that identifies the destination-limit condition today. */
 const SUBCODE_MAX_ENDPOINTS_REACHED = 'max_webhook_endpoints_reached';
+
+/** Account mode: the 403 a test key gets when it writes an account endpoint. */
+const CODE_LIVE_CREDENTIAL_REQUIRED = 'live_credential_required';
+
+/**
+ * Account mode: the 403 a sandbox key meets on a REST account route.
+ *
+ * Measured in the backend: on the REST route a test key is not issued the
+ * permission to write account webhooks (403 `insufficient_scope`), or meets the
+ * sandbox module gate (403 `module_not_available_in_sandbox`). The guard that
+ * emits `live_credential_required` answers only through the MCP channel.
+ */
+const CODE_MODULE_NOT_AVAILABLE_IN_SANDBOX = 'module_not_available_in_sandbox';
+
+/** Prefix of a sandbox API key; it selects the environment. */
+const TEST_KEY_PREFIX = 'fact_test_';
+
+/**
+ * Account mode: the 404 of a path whose account is not the account of the key
+ * (`account_not_found`, param `account`). It is NOT a missing endpoint.
+ */
+const CODE_ACCOUNT_NOT_FOUND = 'account_not_found';
+
+/** Account mode: the 404 of an account endpoint that does not exist. */
+const CODE_WEBHOOK_ENDPOINT_NOT_FOUND = 'webhook_endpoint_not_found';
+
+/** Account mode: the 403 of an issuer that cannot manage the whole account. */
+const CODE_FORBIDDEN_ACTION = 'forbidden_action';
+
+/** Account mode: the 402 of a plan without account webhooks. */
+const CODE_ADDON_REQUIRED = 'addon_required';
+
+/** Account mode: the 422 of an account at its endpoint limit. */
+const CODE_ACCOUNT_ENDPOINT_LIMIT = 'account_webhook_endpoint_limit_reached';
+
+/** `disabled_reason` of an account endpoint whose creator lost the capability. */
+const REASON_CREATOR_LOST_CAPABILITY = 'creator_lost_capability';
 
 /** The field the two URL rejections point at. */
 const PARAM_URL = 'url';
@@ -320,6 +389,58 @@ function translateEndpointFailure(outcome: ApiOutcome, operation: OperationKey):
 }
 
 /**
+ * The failure of an ACCOUNT webhook operation.
+ *
+ * The three account rejections that have their own cause are read from the
+ * envelope first; everything else (a plain 403, the URL and event 422s, a 404, an
+ * unknown status) is the company translation, unchanged. The company calls never
+ * go through here, so a 403 `live_credential_required` on a company route keeps
+ * its original message.
+ */
+function translateAccountEndpointFailure(outcome: ApiOutcome, operation: OperationKey): Error {
+	const envelope = errorEnvelopeOf(outcome.body);
+
+	if (outcome.statusCode === 404 && envelope.code === CODE_ACCOUNT_NOT_FOUND) {
+		return new Error(ERROR_ACCOUNT_NOT_FOUND);
+	}
+
+	if (
+		outcome.statusCode === 403 &&
+		(envelope.code === CODE_LIVE_CREDENTIAL_REQUIRED ||
+			envelope.code === CODE_MODULE_NOT_AVAILABLE_IN_SANDBOX)
+	) {
+		return new Error(ERROR_LIVE_CREDENTIAL_REQUIRED);
+	}
+
+	if (outcome.statusCode === 403 && envelope.code === CODE_FORBIDDEN_ACTION) {
+		return new Error(ERROR_ACCOUNT_CAPABILITY_REQUIRED);
+	}
+
+	if (outcome.statusCode === 402 && envelope.code === CODE_ADDON_REQUIRED) {
+		return new Error(ERROR_ACCOUNT_WEBHOOKS_ADDON_REQUIRED);
+	}
+
+	if (outcome.statusCode === 422 && envelope.code === CODE_ACCOUNT_ENDPOINT_LIMIT) {
+		return new Error(ERROR_ACCOUNT_ENDPOINT_LIMIT_REACHED);
+	}
+
+	return translateEndpointFailure(outcome, operation);
+}
+
+/**
+ * Why an account endpoint that still reads back receives nothing.
+ *
+ * A disabled endpoint is not an HTTP rejection: `GET` answers 200 with
+ * `status: disabled`. The lifecycle calls this when it finds one, so the user
+ * hears the real cause (`creator_lost_capability`) instead of a generic one.
+ */
+export function describeInactiveAccountEndpoint(endpoint: AccountWebhookEndpointV1): string {
+	return endpoint.disabled_reason === REASON_CREATOR_LOST_CAPABILITY
+		? ERROR_ACCOUNT_ENDPOINT_CREATOR_LOST_CAPABILITY
+		: ERROR_ENDPOINT_NOT_ACTIVE;
+}
+
+/**
  * Reads an outcome out of whatever the helper threw.
  *
  * `ignoreHttpStatusErrors` asks the helper not to throw on a 4xx, and the real
@@ -387,6 +508,40 @@ function normaliseBaseUrl(baseUrl: string): string {
 	return baseUrl.replace(/\/+$/, '');
 }
 
+/**
+ * The company-scoped root of the webhook-endpoint routes.
+ *
+ * One function so the three operations cannot drift into two spellings of the
+ * same path, which is exactly what produced the underscore form this replaces.
+ * The company is escaped because it arrives from a field the user types: a
+ * pasted value carrying a slash would otherwise compose a different route
+ * altogether, and the 404 that came back would name the wrong cause.
+ *
+ * An empty company is refused BEFORE this point, by the lifecycle
+ * (`ERROR_COMPANY_NOT_SELECTED`), because composing `companies//` here would
+ * produce a 404 nobody could read.
+ */
+function webhookEndpointsUrl(baseUrl: string, companyId: string): string {
+	return `${baseUrl}/companies/${encodeURIComponent(companyId)}/webhook-endpoints`;
+}
+
+/**
+ * The account-scoped root of the account webhook routes.
+ *
+ * The base is the credential's base, which stops at the version: the account is
+ * a segment added here and never part of the base. An empty account is refused
+ * here with its own catalogued message, because `accounts//webhooks` would
+ * answer a 404 nobody could read, and the lifecycle's own check is not the only
+ * caller this client has.
+ */
+function accountWebhooksUrl(baseUrl: string, accountId: string): string {
+	if (accountId.trim() === '') {
+		throw new Error(ERROR_ACCOUNT_NOT_SELECTED);
+	}
+
+	return `${baseUrl}/accounts/${encodeURIComponent(accountId)}/webhooks`;
+}
+
 export function createFactuareaApiClient(
 	request: FactuareaHttpRequester,
 	options: FactuareaApiClientOptions,
@@ -401,6 +556,21 @@ export function createFactuareaApiClient(
 		Authorization: `Bearer ${options.apiKey}`,
 		Accept: 'application/json',
 	};
+
+	/**
+	 * Refuses, before any request, an account WRITE made with a sandbox key.
+	 *
+	 * The REST answer to a test key is a 403 whose code says only that a
+	 * permission is missing, which sends the user to the scopes when the cure is a
+	 * live key. The prefix of the key already says which environment it belongs
+	 * to, so the node says it first. Reads are not refused, and the company
+	 * routes never reach this check.
+	 */
+	function refuseTestKeyWrite(): void {
+		if (options.apiKey.trim().startsWith(TEST_KEY_PREFIX)) {
+			throw new Error(ERROR_LIVE_CREDENTIAL_REQUIRED);
+		}
+	}
 
 	/**
 	 * Headers for one write, carrying an idempotency key THAT IS NEW ON EVERY
@@ -438,11 +608,12 @@ export function createFactuareaApiClient(
 
 	return {
 		async createWebhookEndpoint(
+			companyId: string,
 			input: CreateWebhookEndpointInput,
 		): Promise<WebhookEndpointWithSecretV1> {
 			const outcome = await exchange(request, {
 				method: 'POST',
-				url: `${baseUrl}/webhook_endpoints`,
+				url: webhookEndpointsUrl(baseUrl, companyId),
 				headers: { ...writeHeaders(), 'Content-Type': 'application/json' },
 				body: input,
 				json: true,
@@ -473,10 +644,13 @@ export function createFactuareaApiClient(
 			return data as unknown as WebhookEndpointWithSecretV1;
 		},
 
-		async getWebhookEndpoint(id: string): Promise<WebhookEndpointV1 | null> {
+		async getWebhookEndpoint(
+			companyId: string,
+			id: string,
+		): Promise<WebhookEndpointV1 | null> {
 			const outcome = await exchange(request, {
 				method: 'GET',
-				url: `${baseUrl}/webhook_endpoints/${encodeURIComponent(id)}`,
+				url: `${webhookEndpointsUrl(baseUrl, companyId)}/${encodeURIComponent(id)}`,
 				headers: readHeaders,
 				json: true,
 				returnFullResponse: true,
@@ -506,10 +680,10 @@ export function createFactuareaApiClient(
 			return data as unknown as WebhookEndpointV1;
 		},
 
-		async deleteWebhookEndpoint(id: string): Promise<void> {
+		async deleteWebhookEndpoint(companyId: string, id: string): Promise<void> {
 			const outcome = await exchange(request, {
 				method: 'DELETE',
-				url: `${baseUrl}/webhook_endpoints/${encodeURIComponent(id)}`,
+				url: `${webhookEndpointsUrl(baseUrl, companyId)}/${encodeURIComponent(id)}`,
 				headers: writeHeaders(),
 				json: true,
 				returnFullResponse: true,
@@ -531,7 +705,118 @@ export function createFactuareaApiClient(
 			throw translateEndpointFailure(outcome, 'delete');
 		},
 
+		async createAccountWebhookEndpoint(
+			accountId: string,
+			body: CreateAccountWebhookEndpointBody,
+		): Promise<AccountWebhookEndpointWithSecretV1> {
+			const url = accountWebhooksUrl(baseUrl, accountId);
+
+			refuseTestKeyWrite();
+
+			const outcome = await exchange(request, {
+				method: 'POST',
+				url,
+				headers: { ...writeHeaders(), 'Content-Type': 'application/json' },
+				body,
+				json: true,
+				returnFullResponse: true,
+				ignoreHttpStatusErrors: true,
+			});
+
+			if (outcome === null) {
+				throw new Error(composedTransportFailure('create'));
+			}
+
+			if (!isSuccess(outcome.statusCode)) {
+				throw translateAccountEndpointFailure(outcome, 'create');
+			}
+
+			const data = asRecord(dataOf(outcome.body));
+
+			// Same reasoning as the company creation: the secret comes back once.
+			if (data === null || asText(data['id']) === null || asText(data['secret']) === null) {
+				throw new Error(composedMalformedResponse('create'));
+			}
+
+			return data as unknown as AccountWebhookEndpointWithSecretV1;
+		},
+
+		async getAccountWebhookEndpoint(
+			accountId: string,
+			endpointId: string,
+		): Promise<AccountWebhookEndpointV1> {
+			const outcome = await exchange(request, {
+				method: 'GET',
+				url: `${accountWebhooksUrl(baseUrl, accountId)}/${encodeURIComponent(endpointId)}`,
+				headers: readHeaders,
+				json: true,
+				returnFullResponse: true,
+				ignoreHttpStatusErrors: true,
+			});
+
+			if (outcome === null) {
+				throw new Error(composedTransportFailure('read'));
+			}
+
+			// The frozen signature has no `null` branch, so a gone endpoint rejects
+			// with its catalogued message and the caller recognises it by that.
+			if (!isSuccess(outcome.statusCode)) {
+				throw translateAccountEndpointFailure(outcome, 'read');
+			}
+
+			const data = asRecord(dataOf(outcome.body));
+
+			if (data === null || asText(data['id']) === null) {
+				throw new Error(composedMalformedResponse('read'));
+			}
+
+			return data as unknown as AccountWebhookEndpointV1;
+		},
+
+		async deleteAccountWebhookEndpoint(accountId: string, endpointId: string): Promise<void> {
+			const url = `${accountWebhooksUrl(baseUrl, accountId)}/${encodeURIComponent(endpointId)}`;
+
+			refuseTestKeyWrite();
+
+			const outcome = await exchange(request, {
+				method: 'DELETE',
+				url,
+				headers: writeHeaders(),
+				json: true,
+				returnFullResponse: true,
+				ignoreHttpStatusErrors: true,
+			});
+
+			if (outcome === null) {
+				throw new Error(composedTransportFailure('delete'));
+			}
+
+			// Already gone is success, as for the company endpoint, but ONLY when the
+			// 404 says the ENDPOINT does not exist. A 404 `account_not_found` means
+			// the account in the path is wrong, so nothing was deleted and the
+			// caller must not forget the endpoint it still owns.
+			if (
+				isSuccess(outcome.statusCode) ||
+				(outcome.statusCode === 404 &&
+					errorEnvelopeOf(outcome.body).code === CODE_WEBHOOK_ENDPOINT_NOT_FOUND)
+			) {
+				return;
+			}
+
+			throw translateAccountEndpointFailure(outcome, 'delete');
+		},
+
 		async listEventCatalog(): Promise<EventCatalogEntryV1[]> {
+			// NO COMPANY SEGMENT HERE, AND THIS OPERATION TAKES NO COMPANY
+			// ARGUMENT. The catalogue enumerates what the product can emit, which
+			// is identical for every company, so the public API publishes it at
+			// the root of the version and answers 404 to anything prefixed with
+			// `companies/<uuid>`. The three operations above gained that prefix;
+			// this one is the measured exception, and it is written out because
+			// the next re-anchoring will arrive with a search for the version
+			// segment and this line would be its first casualty. The credential
+			// test (`FactuareaApi.credentials.ts`) builds the same root path and
+			// is bound by the same rule.
 			const outcome = await exchange(request, {
 				method: 'GET',
 				url: `${baseUrl}/event-catalog`,

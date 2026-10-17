@@ -1,0 +1,27 @@
+{
+	"$meta": {
+		"description": "The fifteen account.* event types, extracted from components.schemas.AccountEventType.enum of the frozen public API document. Do not edit by hand: regenerate with the extraction command.",
+		"source": "the frozen Factuarea public API OpenAPI document (openapi-public.json)",
+		"source_sha256": "fcf93063ad922ca774e78e3d22f2e7b45a711a387fe1a5e72add5ff6c9685848",
+		"source_canonical_digest": "bae0a33a8c42f4983b06cccf68ff2983a1f81d51a44b46547561e3e261cfef9e",
+		"schema_path": "components.schemas.AccountEventType.enum",
+		"extraction_command": "node scripts/extract-account-event-types.mjs <path-to-openapi.json>"
+	},
+	"events": [
+		"account.member_added",
+		"account.member_removed",
+		"account.member_role_changed",
+		"account.owner_transferred",
+		"account.member_grant_changed",
+		"account.access_granted",
+		"account.access_revoked",
+		"account.access_level_changed",
+		"account.managed_account_provisioned",
+		"account.managed_account_claimed",
+		"account.management_ended",
+		"account.nif_added",
+		"account.nif_transferred",
+		"account.nif_archived",
+		"account.import_completed"
+	]
+}

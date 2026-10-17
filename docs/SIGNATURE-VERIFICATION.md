@@ -32,6 +32,9 @@ If you are using the trigger node rather than verifying by hand, it surfaces
 `Factuarea-Delivery-Id` on the item it produces, as a top-level `delivery_id`
 field next to the event body.
 
+A delivery of an **account** webhook carries a sixth header,
+`Factuarea-Account-Relationship`. See section 12.
+
 ## 2. The signature header format
 
 The value of `Factuarea-Signature` is a comma-separated list of `key=value`
@@ -170,8 +173,9 @@ It is worth distinguishing two rejection causes when you report them:
 ## 8. Secret rotation
 
 Factuarea returns a destination's plaintext secret **exactly once**, in the
-response to `POST /v1/webhook_endpoints`. Reading the destination back never
-returns it.
+response to `POST /v1/companies/{company}/webhook-endpoints`, where `{company}`
+is the UUID of the company that owns the destination. Reading the destination
+back never returns it.
 
 When a secret is rotated, Factuarea signs each delivery with **both** the new and
 the previous secret for a **24-hour grace window**, so a correctly written
@@ -343,3 +347,64 @@ values arrive on the item as `id` and `delivery_id`.
 Answer a duplicate with `200` and do nothing else. Answering with an error would
 tell Factuarea the delivery failed and produce more retries of an event you have
 already handled.
+
+## 12. Account deliveries use the same signature
+
+The deliveries of an **account** webhook (`POST /v1/accounts/{account}/webhooks`,
+the Account mode of the trigger) are signed exactly like those of a company
+webhook. Sections 2 to 11 apply unchanged: the same `Factuarea-Signature` header
+with `t=` and one or more `v1=`, the same signed material
+`<t>.<raw body>`, the same HMAC-SHA256 with the secret returned when the endpoint
+was created, the same timestamp tolerance, the same two-candidate rotation
+window, the same constant-time comparison and the same deduplication on the `id`
+in the body. A receiver that verifies company deliveries verifies account ones
+without a change.
+
+What an account delivery adds is one header and three body fields.
+
+**The header.**
+
+| Header | Contents |
+| --- | --- |
+| `Factuarea-Account-Relationship` | `own` or `managed`. Which relationship of the account the event belongs to. |
+
+It travels next to the five headers of section 1. Like them it is **not signed**,
+so read the same value from the body when you need to trust it (see section 11
+for why a header cannot be trusted for decisions).
+
+**The body.** The eight top-level keys of a company event (`id`, `type`,
+`api_version`, `created`, `livemode`, `test`, `correlation_id`, `data`) are all
+present, plus:
+
+| Key | Contents |
+| --- | --- |
+| `account` | `{ "id": "<account uuid>" }`, the account the endpoint belongs to. |
+| `account_relationship` | `own` or `managed`. It is never `all`: `all` is only a filter on the endpoint, not a property of one event. |
+| `company_id` | UUID of the tax id the event is about, or `null` for an event of the account itself, such as `account.member_added`. |
+
+```json
+{
+  "id": "0198f3c2-7a41-7c3e-9d2b-5f6a1b8c4d0e",
+  "type": "account.nif_added",
+  "api_version": "2026-01-01",
+  "created": 1767225600,
+  "livemode": true,
+  "test": false,
+  "correlation_id": null,
+  "account": { "id": "0198f3c2-7a41-7c3e-9d2b-5f6a1b8c4d11" },
+  "account_relationship": "own",
+  "company_id": "0198f3c2-7a41-7c3e-9d2b-5f6a1b8c4d12",
+  "data": {}
+}
+```
+
+The `data` object is left empty here; its content depends on the event.
+
+The three extra keys are inside the signed body, so once the signature verifies
+you can rely on them. One event about a tax id delivered to a company endpoint and
+to an account endpoint has the **same** `id` in both bodies, so deduplicating on
+`id` is correct in each receiver separately.
+
+Inside the trigger node, `account`, `account_relationship` and `company_id` arrive
+on the item with the rest of the body, and the optional **Company ID Filter**
+reads `company_id` only after the signature has been verified.

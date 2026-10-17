@@ -33,6 +33,35 @@
  * guarantee, driving the real client over a doubled HTTP helper, so a
  * regression in either module surfaces here.
  *
+ * ## THIS LOADER HAS NO COMPANY, AND MUST NOT GAIN ONE
+ *
+ * Every webhook route of the public API carries a company in its path. The event
+ * catalogue does NOT: it hangs from the root of the version
+ * (`{baseUrl}/event-catalog`) because it enumerates what the product can emit,
+ * which is the same list for every company, and the API answers 404 to a
+ * catalogue request prefixed with `companies/<uuid>`.
+ *
+ * That is what keeps this file out of the re-anchoring: `listEventCatalog()`
+ * takes no company argument, nothing here reads the node's Company ID
+ * parameter, and nothing should. The consequence is worth stating because it is
+ * a feature — the picker fills itself while the Company ID field is still
+ * empty, so the user chooses events and company in either order — and because
+ * the opposite change would look like a tidy-up: adding the company "for
+ * consistency" would break the one call in this package that a company segment
+ * would make impossible.
+ *
+ * ## Account mode adds the fixed account list, and ONLY in account mode
+ *
+ * The fifteen `account.*` events are served by no route, so in account mode the
+ * options are the public catalogue (read from the same root route, with no
+ * account in it either) united with `ACCOUNT_EVENT_CATALOG`. In company mode
+ * nothing is added: a company endpoint rejects those names. The mode is read
+ * with `getCurrentNodeParameter`, the value the editor shows now, saved or not;
+ * a node that never saved the mode, or an unreadable one, is company mode, which
+ * is the same rule a saved workflow follows. If the public catalogue cannot be
+ * read the picker still fails in both modes, as before: offering only the
+ * account list would pass a half-empty picker off as complete.
+ *
  * ## Ordering
  *
  * Options come back sorted by name with `localeCompare(…, 'en')`. The locale is
@@ -50,9 +79,11 @@ import type {
 } from 'n8n-workflow';
 
 import { createFactuareaApiClient } from '../../client/factuareaApiClient';
-import type { FactuareaHttpRequester } from '../../client/types';
+import { LISTEN_ON_DEFAULT, PARAMETER_LISTEN_ON } from '../../client/types';
+import type { FactuareaHttpRequester, ListenOn } from '../../client/types';
 import { DEFAULT_API_BASE_URL } from '../../contract';
 import { ERROR_EVENT_CATALOG_UNAVAILABLE, ERROR_INSUFFICIENT_SCOPE } from '../../errors';
+import { ACCOUNT_EVENT_CATALOG } from './accountEventCatalog';
 
 /**
  * The credential type this node authenticates with.
@@ -63,6 +94,29 @@ import { ERROR_EVENT_CATALOG_UNAVAILABLE, ERROR_INSUFFICIENT_SCOPE } from '../..
  * fails at runtime with "credentials not found", not at compile time.
  */
 const CREDENTIAL_NAME = 'factuareaApi';
+
+/** What the account events are described as in the picker. */
+const ACCOUNT_EVENT_DESCRIPTION =
+	'Event of the account itself: members, access, managed accounts, tax ids and imports. Only an account webhook can subscribe to it.';
+
+/**
+ * The mode the node is in right now, with company as the answer to anything
+ * that is not exactly `account`.
+ *
+ * The read is guarded because the mode is a hint about WHAT TO ADD, not a
+ * credential: a context that cannot answer (a node that never saved the mode)
+ * must degrade to the company list, which is what a workflow saved before
+ * account mode gets.
+ */
+function listenOnOf(context: ILoadOptionsFunctions): ListenOn {
+	try {
+		const value: unknown = context.getCurrentNodeParameter(PARAMETER_LISTEN_ON);
+
+		return value === 'account' ? 'account' : LISTEN_ON_DEFAULT;
+	} catch {
+		return LISTEN_ON_DEFAULT;
+	}
+}
 
 /** The value as a non-empty string, or `null`. */
 function asText(value: unknown): string | null {
@@ -139,15 +193,28 @@ export async function loadEventOptions(
 		const baseUrl = asText(credentials['baseUrl']) ?? DEFAULT_API_BASE_URL;
 
 		const client = createFactuareaApiClient(requesterOf(this), { baseUrl, apiKey });
+
+		// No company, by contract: the catalogue is a ROOT route. Read the header
+		// of this file before adding one here.
 		const entries = await client.listEventCatalog();
 
-		return entries
-			.map((entry) => ({
-				name: entry.name,
-				value: entry.name,
-				description: entry.description,
-			}))
-			.sort((left, right) => left.name.localeCompare(right.name, 'en'));
+		const options: INodePropertyOptions[] = entries.map((entry) => ({
+			name: entry.name,
+			value: entry.name,
+			description: entry.description,
+		}));
+
+		if (listenOnOf(this) === 'account') {
+			const offered = new Set(options.map((option) => option.name));
+
+			for (const name of ACCOUNT_EVENT_CATALOG) {
+				if (!offered.has(name)) {
+					options.push({ name, value: name, description: ACCOUNT_EVENT_DESCRIPTION });
+				}
+			}
+		}
+
+		return options.sort((left, right) => left.name.localeCompare(right.name, 'en'));
 	} catch (error) {
 		throw catalogueFailure(error);
 	}

@@ -4,6 +4,96 @@ All notable changes to `n8n-nodes-factuarea` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the package
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.2.0 — 2026-10-17 — the company axis (BREAKING)
+
+**Every webhook route of the Factuarea public API now carries the company in its
+path, so this node no longer works against the published API until it is
+released.** The routes this package used —
+`/v1/webhook_endpoints` and `/v1/webhook_endpoints/{id}` — answer `404`: the
+resource moved under `companies/{company}` and its name is now spelled with a
+hyphen. Factuarea used to resolve the company from the API key on its own, and
+it no longer does, which is why the node has to be told which one to work on.
+
+This entry describes work on a branch. Nothing is published yet, and the
+publication step is described in `docs/PULL-REQUEST-COMPANY-AXIS.md`.
+
+### Changed
+
+- The client builds `POST /v1/companies/{company}/webhook-endpoints`,
+  `GET /v1/companies/{company}/webhook-endpoints/{webhook_endpoint}` and
+  `DELETE /v1/companies/{company}/webhook-endpoints/{webhook_endpoint}`. The
+  three operations take the company UUID as their first argument; the company is
+  escaped, so a pasted value cannot compose another route.
+- `src/client/types.ts`, `docs/LIMITATIONS.md`, `docs/SIGNATURE-VERIFICATION.md`
+  and `README.md` describe those forms and no longer show the old ones.
+
+### Added
+
+- **Company ID**, a required parameter of the trigger, first in the editor. It
+  holds the company UUID from Factuarea (Settings, Companies), never a tax id.
+- **Default Company ID**, an optional credential field, used when a trigger
+  leaves its own field empty, so an account with a single company types it once.
+- A catalogued message for the case where neither is filled. The trigger refuses
+  to activate, and refuses to deactivate without removing its destination,
+  instead of picking a company nobody chose.
+
+### Added — account mode
+
+The trigger can now listen to a whole Factuarea account, not only to one
+company. This part is **compatible**: the new **Listen On** parameter defaults
+to `Company`, and a workflow saved before it existed has no value for it and
+behaves exactly as before. Nothing about a company-mode workflow changes, and
+the package still declares one trigger node and one credential.
+
+Target version: **0.2.0**, the same release as the company axis above
+(`origin/main` is `0.1.2`). **Nothing has been published**: this entry describes
+work on a branch, and the publication step, which is the owner's, is described in
+`docs/PULL-REQUEST-ACCOUNT-MODE.md`.
+
+- **Listen On**, with `Company` (default) and `Account`. In `Account` mode the
+  lifecycle registers, checks and removes an account webhook on
+  `/v1/accounts/{account}/webhooks`, and checks and removes it with the mode and
+  the account stored when it was created, so changing either on an active
+  workflow cannot make the node delete another destination.
+- **Account ID** on the node, and **Default Account ID** on the credential. You
+  type it; it is never derived from the API key. With both empty the trigger
+  refuses to activate and the message names both fields.
+- **Account Relationship** (`Own`, `Managed`, `All`; default `All`), sent when the
+  destination is created.
+- **Company ID Filter**, optional. An event of another company is acknowledged
+  with `200` and dropped; an event with no `company_id` always starts the
+  workflow.
+- The fifteen `account.*` events in the **Events** picker of `Account` mode, next
+  to the live public catalogue. They are a fixed list in
+  `src/nodes/FactuareaTrigger/accountEventCatalog.ts`, checked by a test against
+  the frozen API document, because no route serves them. `Company` mode offers
+  none.
+- The emitted item carries `account`, `account_relationship` and `company_id`,
+  and the `Factuarea-Account-Relationship` header is documented. The signature,
+  the tolerance and the deduplication are those of company mode.
+- Catalogued messages for the rejections of account webhooks: a test key, an
+  issuer that cannot manage the whole account, the account endpoint limit of the
+  plan, a plan without account webhooks, and an endpoint disabled because its
+  creator lost the capability.
+- `README.md`, `docs/LIMITATIONS.md` (five new limitations),
+  `docs/SIGNATURE-VERIFICATION.md` and `docs/PULL-REQUEST-ACCOUNT-MODE.md`.
+
+Account mode needs a live (`fact_live_`) key issued by an owner or an admin of the
+account, and is not available through OAuth.
+
+### Unchanged, on purpose
+
+- `GET /v1/event-catalog` keeps hanging from the root of the version, with no
+  company segment: it enumerates what the product can emit, which is the same
+  list for every company. The event picker and the credential test therefore
+  still work before any company has been chosen, and a re-anchoring that pushed
+  a company in front of every route would break both.
+- The base URL of the credential still stops at `/v1`. Putting a company in it
+  would break the catalogue and the credential test, which hang from that same
+  root.
+- The signature, the deduplication, the delivery answers and the shape of the
+  emitted item.
+
 ## 0.1.2 — 2026-09-05
 
 - `package.json` declares `author.name` (Factuarea), required by the official n8n community node scan (`community-package-json-author-name-missing`). No functional change.

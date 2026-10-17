@@ -23,8 +23,9 @@
  * reason is a property of the API rather than a preference:
  *
  *   **The plaintext secret is returned exactly once, by the creation call.**
- *   `GET /v1/webhook_endpoints/{id}` returns eighteen keys and `secret` is not
- *   among them, and there is no other route that hands it back.
+ *   `GET /v1/companies/{company}/webhook-endpoints/{webhook_endpoint}` returns
+ *   eighteen keys and `secret` is not among them, and there is no other route
+ *   that hands it back.
  *
  * A trigger holding a destination it did not create therefore has no secret to
  * verify with. Every delivery would arrive correctly signed, fail verification,
@@ -42,13 +43,62 @@
  * NODE created still exist". A destination created by another workflow, by the
  * dashboard or by the CLI is invisible to it on purpose.
  *
- * ## Where the events, the URL and the credential come from
+ * ## Where the events, the URL, the company and the credential come from
  *
  * The receiving address is n8n's (`getNodeWebhookUrl`) — it is the only party
  * that knows the public address this instance answers on. The event list is the
  * `events` parameter of `src/nodes/FactuareaTrigger/properties.ts`. The API key
  * and base URL are the `factuareaApi` credential of
  * `src/credentials/FactuareaApi.credentials.ts`.
+ *
+ * ## THE COMPANY IS READ, NEVER INFERRED
+ *
+ * Every webhook route of the public API now carries the company in its path,
+ * and this file is where the value that fills it is read: the `companyId`
+ * parameter of the node first, and the `companyId` field of the credential when
+ * that one is empty. Both are typed by the integrator.
+ *
+ * What is prohibited is the third source, the one that used to be free: letting
+ * the API resolve the company from whoever owns the key. It cannot happen by
+ * accident any more — a path built without the segment reaches a route that
+ * does not exist — but it can happen by DESIGN, by quietly picking the first
+ * company a key can see. This file does not: with neither value filled, all
+ * three lifecycle methods refuse with `ERROR_COMPANY_NOT_SELECTED` and name the
+ * two fields. A trigger silently attached to the wrong company would register a
+ * destination that never fires, and the events it waited for would be recorded
+ * against a company nobody chose.
+ *
+ * ## ACCOUNT MODE: the same three methods, on the account routes
+ *
+ * The `listenOn` parameter selects the mode, and a workflow saved without it is
+ * a company workflow. In account mode the three methods address
+ * `/v1/accounts/{account}/webhooks` instead, with the same rules:
+ *
+ *   - The account is read from the node's `accountId` parameter and then from the
+ *     credential's `accountId` field, both typed by the integrator and never
+ *     deduced from the key. With neither filled, `create` fails with
+ *     `ERROR_ACCOUNT_NOT_SELECTED` before any request.
+ *   - `create` stores, next to the endpoint id and the secret, the MODE and the
+ *     ACCOUNT it created the endpoint under (`webhookListenOn`,
+ *     `webhookAccountId`). `checkExists` and `delete` act on those STORED values,
+ *     not on whatever the node says at that moment: if the integrator switches
+ *     account or mode while the workflow is active, the deletion must still hit
+ *     the endpoint that exists, and n8n re-activates with the new parameters. A
+ *     company workflow stores neither key, so an endpoint with no stored mode is
+ *     a company endpoint.
+ *   - A company endpoint stores its COMPANY (`webhookCompanyId`) too. n8n drops
+ *     the parameters that `displayOptions` hides on save, so a workflow switched
+ *     from Company to Account mode loses its `companyId` parameter; the check and
+ *     the deletion prefer the stored company, with the node and the credential as
+ *     a fallback for endpoints saved before the key existed.
+ *   - The stored account is only a first choice: when the mode is stored but the
+ *     account is not, the node and the credential are consulted like on creation.
+ *   - The account `GET` has no `null` branch in the client: a 404 rejects with
+ *     `ERROR_ENDPOINT_GONE`, which `checkExists` reads as "not registered".
+ *   - An endpoint that reads back as `disabled` is not an HTTP rejection. It
+ *     throws with `describeInactiveAccountEndpoint`, which names the real cause.
+ *   - The trigger never adopts an account endpoint it did not create, for the
+ *     reason above: the secret exists only in the creation response.
  */
 
 import type {
@@ -58,15 +108,36 @@ import type {
 	WebhookSetupMethodNames,
 } from 'n8n-workflow';
 
-import { createFactuareaApiClient } from '../../client/factuareaApiClient';
+import {
+	createFactuareaApiClient,
+	describeInactiveAccountEndpoint,
+} from '../../client/factuareaApiClient';
 import type {
+	AccountRelationshipFilter,
 	FactuareaApiClient,
 	FactuareaHttpRequestOptions,
 	FactuareaHttpRequester,
+	ListenOn,
 } from '../../client/types';
-import { STATIC_DATA_ENDPOINT_ID, STATIC_DATA_SECRET } from '../../client/types';
+import {
+	CREDENTIAL_FIELD_ACCOUNT_ID,
+	CREDENTIAL_FIELD_COMPANY_ID,
+	LISTEN_ON_DEFAULT,
+	PARAMETER_ACCOUNT_ID,
+	PARAMETER_ACCOUNT_RELATIONSHIP,
+	PARAMETER_COMPANY_ID,
+	PARAMETER_LISTEN_ON,
+	STATIC_DATA_ACCOUNT_ID,
+	STATIC_DATA_COMPANY_ID,
+	STATIC_DATA_ENDPOINT_ID,
+	STATIC_DATA_LISTEN_ON,
+	STATIC_DATA_SECRET,
+} from '../../client/types';
 import { DEFAULT_API_BASE_URL } from '../../contract';
 import {
+	ERROR_ACCOUNT_NOT_SELECTED,
+	ERROR_COMPANY_NOT_SELECTED,
+	ERROR_ENDPOINT_GONE,
 	ERROR_ENDPOINT_NOT_ACTIVE,
 	ERROR_ENDPOINT_URL_MISMATCH,
 	ERROR_ENDPOINT_URL_NOT_ACCEPTED,
@@ -119,11 +190,26 @@ const STATUS_ACTIVE = 'active';
 interface FactuareaCredential {
 	apiKey?: unknown;
 	baseUrl?: unknown;
+	companyId?: unknown;
+	accountId?: unknown;
 }
 
 /** The value as a non-empty string, or `null`. */
 function asText(value: unknown): string | null {
 	return typeof value === 'string' && value !== '' ? value : null;
+}
+
+/**
+ * The value as a TRIMMED non-empty string, or `null`.
+ *
+ * Used for the company, and trimmed for a reason the other reads do not have: a
+ * uuid is copied out of the Factuarea interface and pasted into a text field,
+ * and a pasted value carries a trailing space often enough that the untrimmed
+ * form would compose a path with `%20` in it. The 404 that came back would name
+ * a company that looks exactly right on screen.
+ */
+function asIdentifier(value: unknown): string | null {
+	return typeof value === 'string' && value.trim() !== '' ? value.trim() : null;
 }
 
 /** The parameter value as a list of event names, ignoring anything else. */
@@ -162,21 +248,164 @@ function requesterFor(context: IHookFunctions): FactuareaHttpRequester {
 }
 
 /**
- * Builds the API client for this invocation from the node's credential.
+ * Where one lifecycle call is addressed: a company route or an account route.
+ *
+ * A discriminated union so that no code can build an account request with a
+ * company id or the reverse.
+ */
+type ApiTarget =
+	| { readonly mode: 'company'; readonly companyId: string }
+	| { readonly mode: 'account'; readonly accountId: string };
+
+/** What one lifecycle call needs: a client, and the target it addresses. */
+interface ApiSession {
+	readonly client: FactuareaApiClient;
+	readonly target: ApiTarget;
+}
+
+/**
+ * The mode of the node right now.
+ *
+ * Anything other than the literal `account` is company mode, which is also what
+ * a workflow saved before the parameter existed resolves to.
+ */
+function currentModeOf(context: IHookFunctions): ListenOn {
+	return context.getNodeParameter(PARAMETER_LISTEN_ON, LISTEN_ON_DEFAULT) === 'account'
+		? 'account'
+		: 'company';
+}
+
+/** The relationship filter of the node; `all` when the value is missing or foreign. */
+function relationshipOf(context: IHookFunctions): AccountRelationshipFilter {
+	const value = context.getNodeParameter(PARAMETER_ACCOUNT_RELATIONSHIP, 'all');
+
+	return value === 'own' || value === 'managed' ? value : 'all';
+}
+
+/**
+ * The mode the stored endpoint was created under.
+ *
+ * Only account endpoints write the key, so its absence means a company endpoint,
+ * including every endpoint created before account mode existed.
+ */
+function storedModeOf(state: Record<string, unknown>): ListenOn {
+	return state[STATIC_DATA_LISTEN_ON] === 'account' ? 'account' : 'company';
+}
+
+/**
+ * Builds the API client for this invocation and resolves where it is addressed,
+ * from the node's parameter first and from the credential second.
  *
  * The base URL falls back to the production default when the credential carries
  * a blank one. The credential declares that default and marks the field
  * required, so a blank value means someone cleared it — and a request composed
  * against an empty base would fail as an unreachable host, which reads as
  * "Factuarea is down" instead of "this credential has no address in it".
+ *
+ * THE COMPANY AND THE ACCOUNT HAVE NO SUCH FALLBACK. Two values are consulted
+ * and both are typed by the integrator: the node parameter, which wins because
+ * it is the one visible next to the activation switch, and the credential
+ * field, which exists so an integrator with a single company or account fills it
+ * once. With neither of them filled this throws, and that is the whole point of
+ * reading them here rather than in each method: there is no third source to fall
+ * through to. Picking the first company the key can see would need one extra
+ * request and would silently attach the trigger to a company nobody chose.
+ *
+ * `mode` is the mode the caller works in: the node's for a creation, the STORED
+ * one for a check and a deletion. `storedAccountId` is the account an account
+ * endpoint was created under; it is preferred over the node and the credential
+ * so that a deletion hits the endpoint that exists.
+ *
+ * The resolution happens BEFORE any request goes out, so a missing company or
+ * account costs no round trip and produces a message that names the field to
+ * fill.
  */
-async function clientFor(context: IHookFunctions): Promise<FactuareaApiClient> {
+async function sessionFor(
+	context: IHookFunctions,
+	mode: ListenOn,
+	storedAccountId: string | null = null,
+	storedCompanyId: string | null = null,
+): Promise<ApiSession> {
 	const credential = await context.getCredentials<FactuareaCredential>(CREDENTIAL_NAME);
 
-	return createFactuareaApiClient(requesterFor(context), {
+	let target: ApiTarget;
+
+	if (mode === 'account') {
+		const accountId =
+			storedAccountId ??
+			asIdentifier(context.getNodeParameter(PARAMETER_ACCOUNT_ID, '')) ??
+			asIdentifier(credential[CREDENTIAL_FIELD_ACCOUNT_ID]);
+
+		if (accountId === null) {
+			throw new Error(ERROR_ACCOUNT_NOT_SELECTED);
+		}
+
+		target = { mode: 'account', accountId };
+	} else {
+		const companyId =
+			storedCompanyId ??
+			asIdentifier(context.getNodeParameter(PARAMETER_COMPANY_ID, '')) ??
+			asIdentifier(credential[CREDENTIAL_FIELD_COMPANY_ID]);
+
+		if (companyId === null) {
+			throw new Error(ERROR_COMPANY_NOT_SELECTED);
+		}
+
+		target = { mode: 'company', companyId };
+	}
+
+	const client = createFactuareaApiClient(requesterFor(context), {
 		apiKey: asText(credential.apiKey) ?? '',
 		baseUrl: asText(credential.baseUrl) ?? DEFAULT_API_BASE_URL,
 	});
+
+	return { client, target };
+}
+
+/** What `checkWebhookExists` compares, whichever kind of endpoint was read. */
+interface StoredEndpointView {
+	readonly status: string | null;
+	readonly url: unknown;
+}
+
+/**
+ * Reads the stored endpoint, reduced to the fields `checkWebhookExists` compares.
+ *
+ * `null` means gone. An account endpoint that reads back `disabled` throws here
+ * with the message of its cause, so the caller never has to know there are two
+ * kinds of endpoint.
+ */
+async function readStoredEndpoint(
+	session: ApiSession,
+	endpointId: string,
+): Promise<StoredEndpointView | null> {
+	const { client, target } = session;
+
+	if (target.mode === 'company') {
+		const endpoint = await client.getWebhookEndpoint(target.companyId, endpointId);
+
+		return endpoint === null ? null : { status: asText(endpoint.status), url: endpoint.url };
+	}
+
+	try {
+		const endpoint = await client.getAccountWebhookEndpoint(target.accountId, endpointId);
+		const status = asText(endpoint.status);
+
+		if (status !== null && status !== STATUS_ACTIVE) {
+			throw new Error(describeInactiveAccountEndpoint(endpoint));
+		}
+
+		return { status, url: endpoint.url };
+	} catch (error) {
+		// The account read has no `null` branch: a 404 rejects with the
+		// catalogued message, and that message is the only thing that tells "it is
+		// gone" apart from every other failure, which must still propagate.
+		if (error instanceof Error && error.message === ERROR_ENDPOINT_GONE) {
+			return null;
+		}
+
+		throw error;
+	}
 }
 
 /**
@@ -259,16 +488,21 @@ export async function checkWebhookExists(this: IHookFunctions): Promise<boolean>
 		return false;
 	}
 
-	const client = await clientFor(this);
-	const endpoint = await client.getWebhookEndpoint(endpointId);
+	// The STORED mode and account: the endpoint to ask about is the one that was
+	// created, not whatever the node says now.
+	const session = await sessionFor(
+		this,
+		storedModeOf(state),
+		asIdentifier(state[STATIC_DATA_ACCOUNT_ID]),
+		asIdentifier(state[STATIC_DATA_COMPANY_ID]),
+	);
+	const endpoint = await readStoredEndpoint(session, endpointId);
 
 	if (endpoint === null) {
 		return false;
 	}
 
-	const status = asText(endpoint.status);
-
-	if (status !== null && status !== STATUS_ACTIVE) {
+	if (endpoint.status !== null && endpoint.status !== STATUS_ACTIVE) {
 		throw new Error(ERROR_ENDPOINT_NOT_ACTIVE);
 	}
 
@@ -306,6 +540,12 @@ export async function checkWebhookExists(this: IHookFunctions): Promise<boolean>
  * an API key that is perfectly fine. The field to fix is in the editor, two
  * inches above the activation switch.
  *
+ * The company is resolved last, after the two checks above, because those two
+ * are free and this one reads the credential. It has no fallback beyond the two
+ * typed values — see `sessionFor` — so an activation with no company named
+ * stops here with the frozen message instead of composing a route without the
+ * segment, which Factuarea would answer with a 404 that names nothing.
+ *
  * Both values the creation returns are stored, and the secret is the one that
  * matters: this call is the ONLY place it is ever available. Losing it means
  * losing the ability to verify every delivery this destination will ever send.
@@ -324,18 +564,44 @@ export async function createWebhookEndpoint(this: IHookFunctions): Promise<boole
 	}
 
 	const description = describeWorkflow(this.getWorkflow());
-	const client = await clientFor(this);
+	const { client, target } = await sessionFor(this, currentModeOf(this));
+	const state = this.getWorkflowStaticData('node');
 
-	const endpoint = await client.createWebhookEndpoint({
+	if (target.mode === 'account') {
+		const endpoint = await client.createAccountWebhookEndpoint(target.accountId, {
+			url,
+			enabled_events: events,
+			account_relationship: relationshipOf(this),
+			...(description === undefined ? {} : { description }),
+		});
+
+		state[STATIC_DATA_ENDPOINT_ID] = endpoint.id;
+		state[STATIC_DATA_SECRET] = endpoint.secret;
+		// The mode and the account the endpoint now lives under: the check and the
+		// deletion read these two, never the node's current values.
+		state[STATIC_DATA_LISTEN_ON] = 'account';
+		state[STATIC_DATA_ACCOUNT_ID] = target.accountId;
+		// A stale company of an earlier company endpoint must not survive.
+		delete state[STATIC_DATA_COMPANY_ID];
+
+		return true;
+	}
+
+	const endpoint = await client.createWebhookEndpoint(target.companyId, {
 		url,
 		enabled_events: events,
 		...(description === undefined ? {} : { description }),
 	});
 
-	const state = this.getWorkflowStaticData('node');
-
 	state[STATIC_DATA_ENDPOINT_ID] = endpoint.id;
 	state[STATIC_DATA_SECRET] = endpoint.secret;
+	// A company endpoint stores no mode: absence means company. Stale account
+	// keys of an earlier endpoint must not survive and redirect the next check.
+	delete state[STATIC_DATA_LISTEN_ON];
+	delete state[STATIC_DATA_ACCOUNT_ID];
+	// The company it lives under: n8n drops the hidden `companyId` parameter if
+	// the integrator later switches the node to account mode.
+	state[STATIC_DATA_COMPANY_ID] = target.companyId;
 
 	return true;
 }
@@ -358,13 +624,36 @@ export async function deleteWebhookEndpoint(this: IHookFunctions): Promise<boole
 	const endpointId = asText(state[STATIC_DATA_ENDPOINT_ID]);
 
 	if (endpointId !== null) {
-		const client = await clientFor(this);
+		// The target is resolved here too, and a missing one THROWS instead of
+		// deleting nothing quietly: the destination exists in Factuarea, and
+		// finishing the deactivation without removing it would leave it
+		// delivering to a workflow that no longer answers, counting against the
+		// account's limit and removable only by hand. Refusing keeps the stored
+		// identifier, so filling the field in and deactivating again finishes the
+		// job.
+		//
+		// The mode and the account are the STORED ones (design D9): an integrator
+		// who switched account or mode with the workflow active must not point the
+		// deletion at another endpoint.
+		const { client, target } = await sessionFor(
+			this,
+			storedModeOf(state),
+			asIdentifier(state[STATIC_DATA_ACCOUNT_ID]),
+			asIdentifier(state[STATIC_DATA_COMPANY_ID]),
+		);
 
-		await client.deleteWebhookEndpoint(endpointId);
+		if (target.mode === 'account') {
+			await client.deleteAccountWebhookEndpoint(target.accountId, endpointId);
+		} else {
+			await client.deleteWebhookEndpoint(target.companyId, endpointId);
+		}
 	}
 
 	delete state[STATIC_DATA_ENDPOINT_ID];
 	delete state[STATIC_DATA_SECRET];
+	delete state[STATIC_DATA_LISTEN_ON];
+	delete state[STATIC_DATA_ACCOUNT_ID];
+	delete state[STATIC_DATA_COMPANY_ID];
 
 	return true;
 }

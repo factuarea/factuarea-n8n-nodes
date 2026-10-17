@@ -47,7 +47,7 @@ than trusted.
 | --- | --- | --- |
 | Display name | `Factuarea` | — |
 | Publisher | Factuarea | — |
-| Description | Spanish invoicing and e-invoicing platform: invoices, quotes, pro formas, delivery notes, recurring and purchase invoices, clients, suppliers, products, document series, taxes and VeriFactu. | — |
+| Description | Spanish invoicing and e-invoicing platform: invoices, quotes, pro formas, delivery notes, recurring and purchase invoices, contacts (customers and suppliers are roles of one contact), products, document series, taxes and VeriFactu. | — |
 | Server URL | `https://mcp.factuarea.com` | `infrastructure/nginx/mcp.factuarea.com.conf` (the subdomain root proxies to the backend MCP transport) |
 | Legacy alias | `https://mcp.factuarea.com/mcp` — still served, kept for compatibility | `docs.factuarea.com/mcp/connect` |
 | Transport | Streamable HTTP. JSON-RPC 2.0 over `POST`; `GET` opens the server-to-client stream; `DELETE` ends a session. No stdio transport is offered publicly. | Live route table: `GET|HEAD mcp`, `POST mcp`, `DELETE mcp` |
