@@ -4,7 +4,7 @@ All notable changes to `n8n-nodes-factuarea` are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the package
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased — the company axis (BREAKING)
+## 0.2.0 — 2026-10-17 — the company axis (BREAKING)
 
 **Every webhook route of the Factuarea public API now carries the company in its
 path, so this node no longer works against the published API until it is
